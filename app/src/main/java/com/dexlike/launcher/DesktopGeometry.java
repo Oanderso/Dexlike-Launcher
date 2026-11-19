@@ -22,6 +22,20 @@ final class DesktopGeometry {
         return new int[]{rightHalf ? middle : left, top, rightHalf ? right : middle, bottom};
     }
 
+    static int[] fitDesktopWindow(int x, int y, int width, int height, int left, int top, int right, int bottom,
+            int displayWidth, int displayHeight, int tolerance) {
+        // Samsung's native half-screen snap uses system stable bounds, including status/navigation
+        // gaps. Recognize that geometry, then use our edge-aware full-height work area instead.
+        boolean tall = height >= displayHeight * .75 && Math.abs(y) <= tolerance
+                && Math.abs(y + height - displayHeight) <= tolerance;
+        boolean halfWidth = Math.abs(width - displayWidth / 2) <= tolerance;
+        if (tall && halfWidth) {
+            if (Math.abs(x) <= tolerance) return snapHalf(left, top, right, bottom, false);
+            if (Math.abs(x + width - displayWidth) <= tolerance) return snapHalf(left, top, right, bottom, true);
+        }
+        return fit(x, y, width, height, left, top, right, bottom);
+    }
+
     static int cellWidth(int icon) { return Math.max(96, icon + 24); }
     static int cellHeight(int icon) { return Math.max(92, icon + 50); }
     static boolean overlaps(int x, int y, int width, int height, int otherX, int otherY, int otherWidth, int otherHeight) {

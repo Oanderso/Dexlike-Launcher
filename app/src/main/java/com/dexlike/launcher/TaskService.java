@@ -141,11 +141,24 @@ public final class TaskService extends ITaskService.Stub {
         try {
             Object service = manager();
             Rect area = new Rect(left, top, right, bottom);
+            android.graphics.Point screen = new android.graphics.Point(right, bottom);
+            android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
+            metrics.density = 1;
+            try {
+                Object displays = Class.forName("android.hardware.display.DisplayManagerGlobal").getMethod("getInstance").invoke(null);
+                android.view.Display deviceDisplay = (android.view.Display) displays.getClass()
+                        .getMethod("getRealDisplay", int.class).invoke(displays, display);
+                deviceDisplay.getRealSize(screen);
+                deviceDisplay.getRealMetrics(metrics);
+            } catch (ReflectiveOperationException ignored) { }
+            int tolerance = Math.round(96 * metrics.density);
             for (TaskInfo task : tasks(service, display, user)) {
                 if (!eligible(task, display, user) || mode(task) != 5 || !task.isRunning || task.numActivities == 0) continue;
                 Rect original = bounds(task);
                 if (original.isEmpty()) continue;
-                Rect fitted = fit(original, area);
+                int[] fittedBounds = DesktopGeometry.fitDesktopWindow(original.left, original.top, original.width(), original.height(),
+                        left, top, right, bottom, screen.x, screen.y, tolerance);
+                Rect fitted = new Rect(fittedBounds[0], fittedBounds[1], fittedBounds[2], fittedBounds[3]);
                 if (!original.equals(fitted)) {
                     resizeWindow(service, task, fitted);
                 }

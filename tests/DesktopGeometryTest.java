@@ -35,6 +35,17 @@ public final class DesktopGeometryTest {
                     throw new AssertionError("incorrect work area for " + edge);
             }
         }
+        for (DesktopGeometry.Edge edge : new DesktopGeometry.Edge[]{DesktopGeometry.Edge.RIGHT, DesktopGeometry.Edge.LEFT}) {
+            int[] area = DesktopGeometry.workArea(0, 0, 1920, 1200, 72, edge);
+            for (boolean rightHalf : new boolean[]{false, true}) {
+                int[] nativeSnap = DesktopGeometry.fitDesktopWindow(rightHalf ? 960 : 0, 28, 960, 1108,
+                        area[0], area[1], area[2], area[3], 1920, 1200, 96);
+                int[] expected = DesktopGeometry.snapHalf(area[0], area[1], area[2], area[3], rightHalf);
+                if (!java.util.Arrays.equals(nativeSnap, expected)) throw new AssertionError("native snap retained system bar gaps");
+            }
+        }
+        int[] ordinary = DesktopGeometry.fitDesktopWindow(100, 120, 600, 400, 0, 0, 1848, 1200, 1920, 1200, 96);
+        if (!java.util.Arrays.equals(ordinary, new int[]{100, 120, 700, 520})) throw new AssertionError("ordinary window mistaken for snap");
         int[] unchanged = DesktopGeometry.fit(100, 120, 600, 400, 0, 28, 1920, 1118);
         if (unchanged[0] != 100 || unchanged[1] != 120 || unchanged[2] != 700 || unchanged[3] != 520)
             throw new AssertionError("fitting changed a window already within the desktop");
