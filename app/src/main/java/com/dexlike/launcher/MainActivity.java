@@ -385,6 +385,8 @@ public class MainActivity extends Activity {
         launch(app, Placement.DEFAULT);
     }
 
+    // Keep the existing optional windowing request and fall back when the device blocks it.
+    @android.annotation.SuppressLint("BlockedPrivateApi")
     private void launch(ResolveInfo app, Placement placement) {
         String key = key(app);
         Intent intent = new Intent(Intent.ACTION_MAIN);
