@@ -10,7 +10,7 @@ android {
         minSdk 29
         targetSdk 32
         versionCode providers.gradleProperty('dexlikeVersionCode').getOrElse('2').toInteger()
-        versionName '0.2.0'
+        versionName '0.2.1'
     }
     buildFeatures { aidl true }
     signingConfigs {

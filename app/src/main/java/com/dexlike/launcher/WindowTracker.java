@@ -34,6 +34,18 @@ final class WindowTracker {
     private IBinder watchedBinder;
     private IBinder.DeathRecipient deathRecipient;
     private int bindAttempt;
+    private int consecutiveFailures;
+
+    enum State { CONNECTING, CONNECTED, NEEDS_PERMISSION, SERVER_STOPPED, FAILED }
+    private State state = State.CONNECTING;
+
+    /** True only when the live window snapshot, not launch history, backs the taskbar. */
+    boolean snapshotAvailable() { return state == State.CONNECTED; }
+    private void status(State next, String message) { state = next; showStatus(message); }
+    private String serverVersion() {
+        try { return Shizuku.pingBinder() ? "Shizuku " + Shizuku.getVersion() : "Shizuku is stopped"; }
+        catch (RuntimeException unavailable) { return "Shizuku version unknown"; }
+    }
 
     private void forgetBinder() {
         if (watchedBinder != null && deathRecipient != null) {
@@ -44,7 +56,11 @@ final class WindowTracker {
 
     private void checkFailure(ITaskService remote) {
         main.post(() -> {
-            if (!closed && service == remote && !remote.asBinder().isBinderAlive()) disconnected();
+            if (closed || service != remote) return;
+            if (!remote.asBinder().isBinderAlive()) { disconnected(); return; }
+            // A live service that keeps refusing calls (lost shell identity, hidden-API denial,
+            // server older than the device needs) never reports binder death, so rebind explicitly.
+            if (++consecutiveFailures >= 4) disconnected();
         });
     }
     private final Shizuku.OnBinderReceivedListener received = () -> main.post(this::connect);
@@ -54,7 +70,7 @@ final class WindowTracker {
         if (code == 71) main.post(() -> {
             if (closed) return;
             if (result == PackageManager.PERMISSION_GRANTED) connect();
-            else showStatus("Shizuku permission denied");
+            else { status(State.NEEDS_PERMISSION, "Shizuku permission denied; allow Dexlike in Shizuku’s authorized applications (" + serverVersion() + ")"); main.postDelayed(reconnect, 3000); }
         });
     }
     private final ServiceConnection connection = new ServiceConnection() {
@@ -104,14 +120,17 @@ final class WindowTracker {
     void requestAccess() {
         try {
             if (!Shizuku.pingBinder()) {
-                showStatus("Start Shizuku first, then connect again");
+                status(State.SERVER_STOPPED, "Start Shizuku first, then connect again (" + serverVersion() + ")");
+                main.postDelayed(reconnect, 3000);
             } else if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
                 if (!ready() && service != null) disconnected();
                 connect(); refresh();
             }
             else if (Shizuku.shouldShowRequestPermissionRationale()) {
-                showStatus("Allow Dexlike in Shizuku’s authorized applications");
-            } else Shizuku.requestPermission(71);
+                // A denied permission is not a dead end: keep watching for authorization changes.
+                status(State.NEEDS_PERMISSION, "Allow Dexlike in Shizuku’s authorized applications (" + serverVersion() + ")");
+                main.postDelayed(reconnect, 3000);
+            } else { status(State.CONNECTING, "Requesting Shizuku permission"); Shizuku.requestPermission(71); }
         } catch (RuntimeException error) { showStatus("Shizuku is unavailable"); }
     }
 
@@ -130,18 +149,20 @@ final class WindowTracker {
                         binding = false;
                         try { Shizuku.unbindUserService(args, connection, false); }
                         catch (RuntimeException ignored) { }
-                        showStatus("Shizuku connection timed out; retrying");
+                        status(State.FAILED, "Shizuku connection timed out; retrying (" + serverVersion() + ")");
                         main.postDelayed(reconnect, 3000);
                     }
                 }, 10000);
             } else {
-                showStatus(Shizuku.pingBinder() ? "Allow Dexlike in Shizuku to restore window controls" : "Shizuku is stopped; start it to restore window controls");
+                status(Shizuku.pingBinder() ? State.NEEDS_PERMISSION : State.SERVER_STOPPED,
+                        Shizuku.pingBinder() ? "Allow Dexlike in Shizuku to restore window controls (" + serverVersion() + ")"
+                                : "Shizuku is stopped; start it to restore window controls");
                 main.postDelayed(reconnect, 5000);
             }
         } catch (RuntimeException error) {
             main.postDelayed(reconnect, 5000);
             binding = false;
-            showStatus("Could not connect to Shizuku");
+            status(State.FAILED, "Could not connect to Shizuku: " + error.getMessage() + " (" + serverVersion() + ")");
         }
     }
 
@@ -154,7 +175,8 @@ final class WindowTracker {
         main.removeCallbacks(reconnect);
         if (active) main.postDelayed(reconnect, 1500);
         main.removeCallbacks(poll);
-        showStatus("Shizuku disconnected; reconnecting when the server is available (Android 16 needs Shizuku 13.6+)");
+        consecutiveFailures = 0;
+        status(State.CONNECTING, "Shizuku disconnected; reconnecting when the server is available (Android 16 needs Shizuku 13.6+, " + serverVersion() + ")");
     }
 
     void refresh() {
@@ -186,7 +208,7 @@ final class WindowTracker {
                 }
             } catch (Exception error) {
                 checkFailure(remote);
-                status = "Window tracking unavailable: " + error.getMessage();
+                status = "Window tracking unavailable (" + serverVersion() + "): " + error.getMessage();
                 cache = null;
                 windows.clear();
             }
@@ -195,9 +217,11 @@ final class WindowTracker {
             main.post(() -> {
                 busy = false;
                 if (closed) return;
+                consecutiveFailures = 0;
                 if (version != generation) { if (active) refresh(); return; }
                 if (active) {
                     if (savedTasks != null) {
+                        state = State.CONNECTED;
                         lastKnown = new ArrayList<>(windows);
                         activity.getSharedPreferences("desktop", 0).edit().putString("taskCache", savedTasks).apply();
                     }

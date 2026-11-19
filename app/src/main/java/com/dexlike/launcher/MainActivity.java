@@ -112,7 +112,7 @@ public class MainActivity extends Activity {
             runningWindows = windows;
             for (RunningWindow window : windows) if (window.focused) lastFocusedWindow = window.id;
             windowStatus = status;
-            windowSnapshotAvailable = status.startsWith("Connected") || status.startsWith("Tracking windows");
+            windowSnapshotAvailable = windowTracker.snapshotAvailable();
             if (windowStatusView != null) windowStatusView.setText(status);
             if (!wasConnected && windowSnapshotAvailable) workspace.refreshSystemWallpaper();
             renderDockApps();
