@@ -110,7 +110,7 @@ final class WindowTracker {
         busy = true;
         final int version = generation;
         ITaskService remote = service;
-        int display = activity.getDisplay().getDisplayId();
+        int display = activity.getWindowManager().getDefaultDisplay().getDisplayId();
         int user = android.os.Process.myUid() / 100000;
         Rect area = activity.desktopWorkArea();
         worker.execute(() -> {
@@ -151,7 +151,7 @@ final class WindowTracker {
         Rect area = activity.desktopWorkArea();
         if (area == null) area = new Rect();
         final Rect work = area;
-        int display = activity.getDisplay().getDisplayId(), user = android.os.Process.myUid() / 100000;
+        int display = activity.getWindowManager().getDefaultDisplay().getDisplayId(), user = android.os.Process.myUid() / 100000;
         worker.execute(() -> {
             String result;
             try { result = remote.restore(window.id, display, user, work.left, work.top, work.right, work.bottom); }

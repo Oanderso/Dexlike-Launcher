@@ -25,6 +25,37 @@ A launcher for Android tablets similar to the classic DEX mode.
 
 The taskbar is part of Dexlike's home screen. Android and One UI control other apps' title bars, window placement and minimization.
 
+## ADB setup for window tracking and taskbar controls
+
+With USB debugging authorized and Shizuku installed, run:
+
+```sh
+adb devices
+adb shell sh /sdcard/Android/data/moe.shizuku.privileged.api/start.sh
+```
+
+Then open **Dexlike settings → Connect window tracking with Shizuku** and approve the Shizuku permission prompt. Starting the Shizuku server alone does not grant Dexlike permission. Repeat the starter command after each tablet reboot, or start Shizuku through its wireless-debugging workflow. See [Shizuku's setup guide](https://shizuku.rikka.app/guide/setup/).
+
+For taskbar system buttons, open Android's accessibility settings:
+
+```sh
+adb shell am start -a android.settings.ACCESSIBILITY_SETTINGS
+```
+
+Enable **Installed apps → Dexlike taskbar controls**. If blocked as a restricted setting, first allow restricted settings under **Settings → Apps → Dexlike Launcher → ⋮**. Do not replace the entire enabled-accessibility-services setting: that would turn off other services. No WRITE_SECURE_SETTINGS, overlay, or usage-access grant is required for this implementation.
+
+Optional global navigation suppression, if Samsung ignores Dexlike's own immersive request:
+
+```sh
+adb shell settings put global policy_control immersive.navigation=*
+```
+
+This applies beyond Dexlike and allows edge-swipe reveal. To remove this override (when no previous policy was configured):
+
+```sh
+adb shell settings delete global policy_control
+```
+
 ## APK updates
 
 Use the **DexlikeLauncher-signed-update-apk** artifact for ongoing installations. Opening a newer signed APK on the tablet updates Dexlike in place when the installed app uses the same signing key. The GitHub workflow assigns increasing version codes. Preview APKs use the runner's debug key and are for isolated tests.
