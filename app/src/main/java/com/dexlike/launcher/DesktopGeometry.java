@@ -18,8 +18,13 @@ final class DesktopGeometry {
     }
 
     static int[] snapHalf(int left, int top, int right, int bottom, boolean rightHalf) {
-        int middle = left + (right - left) / 2;
-        return new int[]{rightHalf ? middle : left, top, rightHalf ? right : middle, bottom};
+        return snapHalf(left, top, right, bottom, rightHalf, left, right);
+    }
+
+    static int[] snapHalf(int left, int top, int right, int bottom, boolean rightHalf, int displayLeft, int displayRight) {
+        int middle = displayLeft + (displayRight - displayLeft) / 2;
+        return new int[]{rightHalf ? Math.max(left, middle) : left, top,
+                rightHalf ? right : Math.min(right, middle), bottom};
     }
 
     static int[] fitDesktopWindow(int x, int y, int width, int height, int left, int top, int right, int bottom,
@@ -29,9 +34,12 @@ final class DesktopGeometry {
         boolean tall = height >= displayHeight * .75 && Math.abs(y) <= tolerance
                 && Math.abs(y + height - displayHeight) <= tolerance;
         boolean halfWidth = Math.abs(width - displayWidth / 2) <= tolerance;
+        boolean maximized = Math.abs(x) <= tolerance && Math.abs(x + width - displayWidth) <= tolerance;
+        boolean fillsWorkWidth = Math.abs(x - left) <= tolerance && Math.abs(x + width - right) <= tolerance;
+        if (tall && (maximized || fillsWorkWidth)) return new int[]{left, top, right, bottom};
         if (tall && halfWidth) {
-            if (Math.abs(x) <= tolerance) return snapHalf(left, top, right, bottom, false);
-            if (Math.abs(x + width - displayWidth) <= tolerance) return snapHalf(left, top, right, bottom, true);
+            if (Math.abs(x) <= tolerance) return snapHalf(left, top, right, bottom, false, 0, displayWidth);
+            if (Math.abs(x + width - displayWidth) <= tolerance) return snapHalf(left, top, right, bottom, true, 0, displayWidth);
         }
         return fit(x, y, width, height, left, top, right, bottom);
     }

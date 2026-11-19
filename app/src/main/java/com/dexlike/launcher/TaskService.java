@@ -167,8 +167,9 @@ public final class TaskService extends ITaskService.Stub {
                 deviceDisplay.getRealMetrics(metrics);
             } catch (ReflectiveOperationException ignored) { }
             int tolerance = Math.round(96 * metrics.density);
-            String lastError = "";
-            for (TaskInfo task : liveTasks(service, display)) {
+            java.util.ArrayList<TaskInfo> changedTasks = new java.util.ArrayList<>();
+            java.util.ArrayList<Rect> changedBounds = new java.util.ArrayList<>();
+            for (TaskInfo task : tasks(service, display, user)) {
                 if (!eligible(task, display, user) || mode(task) != 5 || !task.isRunning || task.numActivities == 0) continue;
                 Rect original = bounds(task);
                 if (original.isEmpty()) continue;
@@ -176,36 +177,47 @@ public final class TaskService extends ITaskService.Stub {
                         left, top, right, bottom, screen.x, screen.y, tolerance);
                 Rect fitted = new Rect(fittedBounds[0], fittedBounds[1], fittedBounds[2], fittedBounds[3]);
                 if (!original.equals(fitted)) {
-                    try { resizeWindow(service, task, fitted); }
-                    catch (Exception error) { lastError = "Task " + task.taskId + ": " + message(error); }
+                    changedTasks.add(task);
+                    changedBounds.add(fitted);
                 }
             }
-            return lastError;
+            if (!changedTasks.isEmpty()) resizeWindows(service, changedTasks, changedBounds);
+            return "";
         } catch (Exception error) { return message(error); }
     }
 
     private void resizeWindow(Object service, TaskInfo task, Rect fitted) throws Exception {
-        // Samsung's default-display desktop has its own status-bar visibility state,
-        // independent of immersive policy. Otherwise it shifts top=0 below stable insets.
+        resizeWindows(service, java.util.Collections.singletonList(task), java.util.Collections.singletonList(fitted));
+    }
+
+    private void resizeWindows(Object service, List<TaskInfo> changedTasks, List<Rect> changedBounds) throws Exception {
+        // Samsung's desktop maintains system-bar reservations independently of immersive
+        // policy. Clear both so its taskbar overlays windows instead of reserving a bottom strip.
         try {
             Object multi = invoke(service, "getMultiTaskingBinder", new Class<?>[]{});
             Class.forName("com.samsung.android.multiwindow.IMultiTaskingBinder")
                     .getMethod("updateSystemBarVis", int.class, int.class)
-                    .invoke(multi, 0, android.view.WindowInsets.Type.statusBars());
+                    .invoke(multi, 0, 3); // WindowInsets.Type.statusBars() | navigationBars(), also safe on API 29.
         } catch (ClassNotFoundException | NoSuchMethodException otherPlatform) { }
         try {
             // Modern DeX windows belong to a task organizer. Apply their bounds through
             // that organizer rather than relying on the legacy resizeTask path.
             Class<?> transactionClass = Class.forName("android.window.WindowContainerTransaction");
             Object transaction = transactionClass.getConstructor().newInstance();
-            Object token = task.getClass().getField("token").get(task);
-            transactionClass.getMethod("setBounds", Class.forName("android.window.WindowContainerToken"), Rect.class)
-                    .invoke(transaction, token, fitted);
+            Method setBounds = transactionClass.getMethod("setBounds", Class.forName("android.window.WindowContainerToken"), Rect.class);
+            // Commit a snap group together so resizing one member cannot leave the other
+            // with stale native bounds until the next transaction.
+            for (int i = 0; i < changedTasks.size(); i++) {
+                TaskInfo task = changedTasks.get(i);
+                Object token = task.getClass().getField("token").get(task);
+                setBounds.invoke(transaction, token, changedBounds.get(i));
+            }
             Object organizer = invoke(service, "getWindowOrganizerController", new Class<?>[]{});
             Class.forName("android.window.IWindowOrganizerController").getMethod("applyTransaction", transactionClass)
                     .invoke(organizer, transaction);
         } catch (ReflectiveOperationException modernUnavailable) {
-            invoke(service, "resizeTask", new Class<?>[]{int.class, Rect.class, int.class}, task.taskId, fitted, 0);
+            for (int i = 0; i < changedTasks.size(); i++)
+                invoke(service, "resizeTask", new Class<?>[]{int.class, Rect.class, int.class}, changedTasks.get(i).taskId, changedBounds.get(i), 0);
         }
     }
 

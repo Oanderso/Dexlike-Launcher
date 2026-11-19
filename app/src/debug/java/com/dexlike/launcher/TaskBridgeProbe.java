@@ -11,6 +11,23 @@ public final class TaskBridgeProbe {
                 if (file != null) android.graphics.BitmapFactory.decodeFileDescriptor(file.getFileDescriptor(), null, options);
                 System.out.println("wallpaper=" + options.outWidth + "x" + options.outHeight);
             }
+        } else if (args.length == 2 && "minimize".equals(args[0])) {
+            System.out.println("minimize=" + service.minimize(Integer.parseInt(args[1]), 0, 0));
+        } else if (args.length == 2 && "restore".equals(args[0])) {
+            System.out.println("restore=" + service.restore(Integer.parseInt(args[1]), 0, 0, 0, 0, 0, 0));
+        } else if (args.length == 5 && "fit".equals(args[0])) {
+            System.out.println("fit=" + service.fitWindows(0, 0, Integer.parseInt(args[1]), Integer.parseInt(args[2]),
+                    Integer.parseInt(args[3]), Integer.parseInt(args[4])));
+            Thread.sleep(700);
+            System.out.println(service.snapshot(0, 0));
+        } else if (args.length == 1 && "live".equals(args[0])) {
+            java.lang.reflect.Method manager = TaskService.class.getDeclaredMethod("manager");
+            manager.setAccessible(true);
+            java.lang.reflect.Method live = TaskService.class.getDeclaredMethod("liveTasks", Object.class, int.class);
+            live.setAccessible(true);
+            for (Object task : (java.util.List<?>) live.invoke(service, manager.invoke(service), 0)) {
+                System.out.println(task);
+            }
         } else if (args.length == 6 && "test-bounds".equals(args[0])) {
             java.lang.reflect.Method manager = TaskService.class.getDeclaredMethod("manager");
             manager.setAccessible(true);

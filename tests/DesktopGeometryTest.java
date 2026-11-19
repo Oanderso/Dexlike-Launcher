@@ -21,7 +21,7 @@ public final class DesktopGeometryTest {
             for (int thickness : new int[]{64, 72, 134}) {
                 int[] area = DesktopGeometry.workArea(10, 20, 1920, 1200, thickness, edge);
                 for (boolean rightHalf : new boolean[]{false, true}) {
-                    int[] half = DesktopGeometry.snapHalf(area[0], area[1], area[2], area[3], rightHalf);
+                    int[] half = DesktopGeometry.snapHalf(area[0], area[1], area[2], area[3], rightHalf, 10, 1930);
                     if (half[1] != area[1] || half[3] != area[3]) throw new AssertionError("snap left a status/taskbar gap");
                     if ((!rightHalf && half[0] != area[0]) || (rightHalf && half[2] != area[2]))
                         throw new AssertionError("snap crossed dock edge");
@@ -40,9 +40,41 @@ public final class DesktopGeometryTest {
             for (boolean rightHalf : new boolean[]{false, true}) {
                 int[] nativeSnap = DesktopGeometry.fitDesktopWindow(rightHalf ? 960 : 0, 28, 960, 1108,
                         area[0], area[1], area[2], area[3], 1920, 1200, 96);
-                int[] expected = DesktopGeometry.snapHalf(area[0], area[1], area[2], area[3], rightHalf);
+                int[] expected = DesktopGeometry.snapHalf(area[0], area[1], area[2], area[3], rightHalf, 0, 1920);
                 if (!java.util.Arrays.equals(nativeSnap, expected)) throw new AssertionError("native snap retained system bar gaps");
             }
+        }
+        for (DesktopGeometry.Edge edge : DesktopGeometry.Edge.values()) {
+            int[] area = DesktopGeometry.workArea(0, 0, 2960, 1848, 126, edge);
+            int[] maximized = DesktopGeometry.fitDesktopWindow(0, 0, 2960, 1736,
+                    area[0], area[1], area[2], area[3], 2960, 1848, 168);
+            if (!java.util.Arrays.equals(maximized, area)) throw new AssertionError("maximized window kept 112px taskbar gap for " + edge);
+            int[] alreadyFitted = DesktopGeometry.fitDesktopWindow(area[0], area[1], area[2]-area[0], 1736-area[1],
+                    area[0], area[1], area[2], area[3], 2960, 1848, 168);
+            if (!java.util.Arrays.equals(alreadyFitted, area)) throw new AssertionError("fitted width retained taskbar gap");
+        }
+        for (DesktopGeometry.Edge edge : DesktopGeometry.Edge.values()) {
+            int[] area = DesktopGeometry.workArea(0, 0, 2960, 1848, 126, edge);
+            for (boolean rightHalf : new boolean[]{false, true}) {
+                int[] pair = DesktopGeometry.fitDesktopWindow(rightHalf ? 1480 : 0, 0, 1480, 1736,
+                        area[0], area[1], area[2], area[3], 2960, 1848, 168);
+                int[] expected = DesktopGeometry.snapHalf(area[0], area[1], area[2], area[3], rightHalf, 0, 2960);
+                if (!java.util.Arrays.equals(pair, expected)) throw new AssertionError("paired snap ignored " + edge);
+            }
+        }
+        for (DesktopGeometry.Edge edge : new DesktopGeometry.Edge[]{DesktopGeometry.Edge.LEFT, DesktopGeometry.Edge.RIGHT}) {
+            int[] area = DesktopGeometry.workArea(0, 0, 2960, 1848, 126, edge);
+            int[] leftHalf = DesktopGeometry.fitDesktopWindow(0, 0, 1480, 1736,
+                    area[0], area[1], area[2], area[3], 2960, 1848, 168);
+            int[] rightHalf = DesktopGeometry.fitDesktopWindow(1480, 0, 1480, 1736,
+                    area[0], area[1], area[2], area[3], 2960, 1848, 168);
+            if (leftHalf[2] != 1480 || rightHalf[0] != 1480) throw new AssertionError("side bar moved screen split");
+            if (leftHalf[0] != (edge == DesktopGeometry.Edge.LEFT ? 126 : 0)
+                    || rightHalf[2] != (edge == DesktopGeometry.Edge.RIGHT ? 2834 : 2960))
+                throw new AssertionError("gap applied to wrong edge");
+            int[] repeated = DesktopGeometry.fitDesktopWindow(rightHalf[0], rightHalf[1], rightHalf[2]-rightHalf[0], rightHalf[3]-rightHalf[1],
+                    area[0], area[1], area[2], area[3], 2960, 1848, 168);
+            if (!java.util.Arrays.equals(rightHalf, repeated)) throw new AssertionError("repeated snap drifted");
         }
         int[] ordinary = DesktopGeometry.fitDesktopWindow(100, 120, 600, 400, 0, 0, 1848, 1200, 1920, 1200, 96);
         if (!java.util.Arrays.equals(ordinary, new int[]{100, 120, 700, 520})) throw new AssertionError("ordinary window mistaken for snap");

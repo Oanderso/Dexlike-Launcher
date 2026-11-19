@@ -841,7 +841,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    Rect desktopWorkArea() {
+    private Rect desktopDisplayBounds() {
         Rect display;
         if (Build.VERSION.SDK_INT >= 30) display = getWindowManager().getMaximumWindowMetrics().getBounds();
         else {
@@ -849,6 +849,11 @@ public class MainActivity extends Activity {
             getWindowManager().getDefaultDisplay().getRealSize(size);
             display = new Rect(0, 0, size.x, size.y);
         }
+        return display;
+    }
+
+    Rect desktopWorkArea() {
+        Rect display = desktopDisplayBounds();
         int[] area = DesktopGeometry.workArea(display.left, display.top, display.width(), display.height(),
                 taskbarThickness(), dockEdge());
         return new Rect(area[0], area[1], area[2], area[3]);
@@ -858,8 +863,9 @@ public class MainActivity extends Activity {
         Rect workspace = desktopWorkArea();
         if (workspace == null) return null;
         if (placement == Placement.LEFT || placement == Placement.RIGHT) {
+            Rect display = desktopDisplayBounds();
             int[] bounds = DesktopGeometry.snapHalf(workspace.left, workspace.top, workspace.right, workspace.bottom,
-                    placement == Placement.RIGHT);
+                    placement == Placement.RIGHT, display.left, display.right);
             return new Rect(bounds[0], bounds[1], bounds[2], bounds[3]);
         }
         workspace.inset(workspace.width() / 8, workspace.height() / 8);
