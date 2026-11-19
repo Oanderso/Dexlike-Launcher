@@ -2,20 +2,18 @@ package com.dexlike.launcher;
 
 import android.app.Activity;
 import android.app.ActivityOptions;
-import android.app.ActivityManager;
+import android.graphics.Rect;
 import android.content.ComponentName;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
-import android.view.ViewGroup;
+import android.view.PopupMenu;
 import android.widget.*;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -32,10 +30,19 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private List<ResolveInfo> apps;
     private final ArrayList<String> recent = new ArrayList<>();
+    private HorizontalScrollView dockScroll;
+    private LinearLayout dockApps;
+
+    private enum Placement { DEFAULT, CENTER, LEFT, RIGHT }
+
     private boolean drawerOpen = false;
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (savedInstanceState != null) {
+            ArrayList<String> savedRecent = savedInstanceState.getStringArrayList("recent");
+            if (savedRecent != null) recent.addAll(savedRecent);
+        }
         getWindow().setStatusBarColor(background);
         getWindow().setNavigationBarColor(background);
         prefs = getSharedPreferences("desktop", MODE_PRIVATE);
@@ -71,18 +78,6 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(background);
         setContentView(root);
 
-        TextView title = label("Dexlike Desktop", 27);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        FrameLayout.LayoutParams titleParams = new FrameLayout.LayoutParams(-2, dp(72), Gravity.TOP | Gravity.LEFT);
-        titleParams.leftMargin = dp(22); titleParams.topMargin = dp(20);
-        root.addView(title, titleParams);
-
-        TextView hint = label("Open apps from the taskbar  •  Long-press an app to pin it", 13);
-        hint.setTextColor(0xFFB4C4D6);
-        FrameLayout.LayoutParams hintParams = new FrameLayout.LayoutParams(-2, dp(35), Gravity.TOP | Gravity.LEFT);
-        hintParams.leftMargin = dp(22); hintParams.topMargin = dp(88);
-        root.addView(hint, hintParams);
-
         dock = new LinearLayout(this);
         dock.setGravity(Gravity.CENTER_VERTICAL);
         dock.setPadding(dp(8), dp(5), dp(8), dp(5));
@@ -93,7 +88,10 @@ public class MainActivity extends Activity {
     }
 
     private void refreshDock() {
-        dock.removeAllViews();
+        if (dockApps != null) {
+            renderDockApps();
+            return;
+        }
         TextView menu = label("☰  Apps", 17);
         menu.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         menu.setOnClickListener(v -> toggleDrawer());
@@ -103,6 +101,23 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams div = new LinearLayout.LayoutParams(dp(1), dp(35));
         div.setMargins(dp(5), 0, dp(10), 0); dock.addView(divider, div);
 
+        dockScroll = new HorizontalScrollView(this);
+        dockScroll.setHorizontalScrollBarEnabled(false);
+        dock.addView(dockScroll, new LinearLayout.LayoutParams(0, -1, 1));
+        dockApps = new LinearLayout(this);
+        dockScroll.addView(dockApps, new FrameLayout.LayoutParams(-2, -1));
+
+        TextClock clock = new TextClock(this);
+        clock.setTextColor(textColor);
+        clock.setTextSize(13);
+        clock.setGravity(Gravity.CENTER_VERTICAL);
+        clock.setPadding(dp(10), 0, dp(4), 0);
+        dock.addView(clock, new LinearLayout.LayoutParams(-2, -1));
+        renderDockApps();
+    }
+
+    private void renderDockApps() {
+        dockApps.removeAllViews();
         String pinned = prefs.getString("pinned", "");
         ArrayList<String> visible = new ArrayList<>();
         if (!pinned.isEmpty()) for (String key : pinned.split("\\|")) if (find(key) != null && !visible.contains(key)) visible.add(key);
@@ -120,13 +135,53 @@ public class MainActivity extends Activity {
             name.setPadding(dp(2), 0, dp(2), 0);
             entry.addView(name, new LinearLayout.LayoutParams(dp(90), dp(20)));
             entry.setOnClickListener(v -> launch(app));
-            entry.setOnLongClickListener(v -> { togglePin(key); return true; });
-            dock.addView(entry, new LinearLayout.LayoutParams(dp(98), -1));
+            if (recent.contains(key)) {
+                View indicator = new View(this);
+                indicator.setBackgroundColor(0xFF98BDE9);
+                entry.addView(indicator, new LinearLayout.LayoutParams(dp(16), dp(2)));
+            }
+            bindAppMenu(entry, app);
+            dockApps.addView(entry, new LinearLayout.LayoutParams(dp(98), -1));
         }
-        Space space = new Space(this);
-        dock.addView(space, new LinearLayout.LayoutParams(0, 1, 1));
-        TextView clock = label(java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(new java.util.Date()), 13);
-        dock.addView(clock);
+    }
+
+    private void bindAppMenu(View anchor, ResolveInfo app) {
+        anchor.setOnLongClickListener(v -> {
+            showAppMenu(v, app);
+            return true;
+        });
+        anchor.setOnContextClickListener(v -> {
+            showAppMenu(v, app);
+            return true;
+        });
+    }
+
+    private void showAppMenu(View anchor, ResolveInfo app) {
+        String appKey = key(app);
+        boolean pinned = java.util.Arrays.asList(prefs.getString("pinned", "").split("\\|")).contains(appKey);
+        PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenu().add(pinned ? "Unpin from dock" : "Pin to dock")
+                .setOnMenuItemClickListener(item -> { togglePin(appKey); return true; });
+        if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_FREEFORM_WINDOW_MANAGEMENT)) {
+            addPlacement(menu, app, "Open centered", Placement.CENTER);
+            addPlacement(menu, app, "Open on left", Placement.LEFT);
+            addPlacement(menu, app, "Open on right", Placement.RIGHT);
+        }
+        if (recent.contains(appKey)) {
+            menu.getMenu().add("Clear from recent apps").setOnMenuItemClickListener(item -> {
+                recent.remove(appKey);
+                refreshDock();
+                return true;
+            });
+        }
+        menu.show();
+    }
+
+    private void addPlacement(PopupMenu menu, ResolveInfo app, String title, Placement placement) {
+        menu.getMenu().add(title).setOnMenuItemClickListener(item -> {
+            launch(app, placement);
+            return true;
+        });
     }
 
     private void togglePin(String key) {
@@ -140,9 +195,11 @@ public class MainActivity extends Activity {
     }
 
     private void launch(ResolveInfo app) {
+        launch(app, Placement.DEFAULT);
+    }
+
+    private void launch(ResolveInfo app, Placement placement) {
         String key = key(app);
-        recent.remove(key); recent.add(0, key);
-        if (recent.size() > 8) recent.remove(recent.size() - 1);
         Intent intent = new Intent(Intent.ACTION_MAIN);
         intent.addCategory(Intent.CATEGORY_LAUNCHER);
         intent.setComponent(new ComponentName(app.activityInfo.packageName, app.activityInfo.name));
@@ -155,13 +212,47 @@ public class MainActivity extends Activity {
                 method.setAccessible(true);
                 method.invoke(options, 5);
             } catch (Exception ignored) { /* Samsung may restrict this hidden API. */ }
+            Rect bounds = launchBounds(placement);
+            if (bounds != null) options.setLaunchBounds(bounds);
             try { startActivity(intent, options.toBundle()); }
             catch (Exception freeformError) { startActivity(intent); }
+            if (!recent.contains(key)) {
+                recent.add(key);
+                if (recent.size() > 8) recent.remove(0);
+            }
             if (drawerOpen) toggleDrawer();
             refreshDock();
         } catch (Exception e) {
             Toast.makeText(this, "Cannot launch app: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    private Rect launchBounds(Placement placement) {
+        if (placement == Placement.DEFAULT || dock.getTop() <= 0) return null;
+
+        int[] origin = new int[2];
+        root.getLocationOnScreen(origin);
+        Rect workspace = new Rect(origin[0], origin[1],
+                origin[0] + root.getWidth(), origin[1] + dock.getTop());
+        int gap = dp(8);
+        workspace.inset(gap, gap);
+        if (workspace.width() < gap * 2 || workspace.height() < gap * 2) return null;
+
+        int middle = workspace.centerX();
+        switch (placement) {
+            case LEFT:
+                workspace.right = middle - gap / 2;
+                break;
+            case RIGHT:
+                workspace.left = middle + gap / 2;
+                break;
+            case CENTER:
+                workspace.inset(workspace.width() / 8, workspace.height() / 8);
+                break;
+            default:
+                break;
+        }
+        return workspace;
     }
 
     private void toggleDrawer() {
@@ -199,7 +290,7 @@ public class MainActivity extends Activity {
                 TextView name = label(title, 15);
                 row.addView(name, new LinearLayout.LayoutParams(0, dp(52), 1));
                 row.setOnClickListener(v -> launch(app));
-                row.setOnLongClickListener(v -> { togglePin(key(app)); return true; });
+                bindAppMenu(row, app);
                 list.addView(row);
             }
         };
@@ -209,6 +300,11 @@ public class MainActivity extends Activity {
             public void afterTextChanged(android.text.Editable s) {}
         });
         render.run();
+    }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putStringArrayList("recent", new ArrayList<>(recent));
     }
 
     @Override protected void onResume() { super.onResume(); if (dock != null) refreshDock(); }
