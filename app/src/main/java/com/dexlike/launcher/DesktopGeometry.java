@@ -1,6 +1,12 @@
 package com.dexlike.launcher;
 
 final class DesktopGeometry {
+    static int[] workArea(int left, int top, int width, int height, int thickness, boolean rightDock) {
+        int right = left + Math.max(0, width - (rightDock ? thickness : 0));
+        int bottom = top + Math.max(0, height - (rightDock ? 0 : thickness));
+        return new int[]{left, top, right, bottom};
+    }
+
     static int cellWidth(int icon) { return Math.max(96, icon + 24); }
     static int cellHeight(int icon) { return Math.max(92, icon + 50); }
     static boolean overlaps(int x, int y, int width, int height, int otherX, int otherY, int otherWidth, int otherHeight) {
