@@ -23,13 +23,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Configure Android SDK
-        uses: android-actions/setup-android@v3
-
+      # GitHub-hosted Ubuntu runners include Android command-line tools.
+      # Do not use android-actions/setup-android@v3: it attempts to install
+      # the removed legacy SDK package "tools" and fails before compilation.
       - name: Install Android API 35 and build tools
+        shell: bash
         run: |
+          set -e
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          command -v sdkmanager
           yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
 
       - name: Configure Gradle
         uses: gradle/actions/setup-gradle@v4
