@@ -86,6 +86,18 @@ final class DesktopWorkspace extends FrameLayout {
 
     void showMenu(View anchor) {
         PopupMenu menu = new PopupMenu(activity, anchor);
+        menu.getMenu().add("Add app").setOnMenuItemClickListener(item -> {
+            activity.chooseDesktopApp();
+            return true;
+        });
+        menu.getMenu().add("Add widget").setOnMenuItemClickListener(item -> {
+            chooseWidget();
+            return true;
+        });
+        menu.getMenu().add("Settings").setOnMenuItemClickListener(item -> {
+            activity.showDesktopSettings();
+            return true;
+        });
         menu.getMenu().add("Choose wallpaper").setOnMenuItemClickListener(item -> {
             Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*")
                     .addCategory(Intent.CATEGORY_OPENABLE);
@@ -102,14 +114,6 @@ final class DesktopWorkspace extends FrameLayout {
                 return true;
             });
         }
-        menu.getMenu().add("Add widget").setOnMenuItemClickListener(item -> {
-            chooseWidget();
-            return true;
-        });
-        menu.getMenu().add("Desktop settings").setOnMenuItemClickListener(item -> {
-            activity.showDesktopSettings();
-            return true;
-        });
         menu.show();
     }
 
