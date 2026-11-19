@@ -76,7 +76,7 @@ public class MainActivity extends Activity {
             int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 0);
             if (level >= 0 && scale > 0) {
                 String percent = Math.round(level * 100f / scale) + "%";
-                quickSettings.setText(percent + " ▾");
+                quickSettings.setText(sideTaskbar() ? percent : percent + " ▾");
                 quickSettings.setContentDescription("Quick Settings, battery " + percent);
             }
         }
@@ -283,7 +283,8 @@ public class MainActivity extends Activity {
         @Override public void draw(android.graphics.Canvas canvas) {
             Rect bounds = getBounds();
             float x = bounds.exactCenterX(), y = bounds.exactCenterY();
-            float r = Math.min(dp(14), Math.min(bounds.width(), bounds.height()) * .24f);
+            float r = Math.min(dp(14) * buttonScale(), Math.min(bounds.width(), bounds.height()) * .4f);
+            paint.setStrokeWidth(Math.max(dp(1), dp(2) * buttonScale()));
             paint.setStyle(android.graphics.Paint.Style.STROKE);
             if (shape == 0) {
                 paint.setStyle(android.graphics.Paint.Style.FILL);
@@ -365,6 +366,15 @@ public class MainActivity extends Activity {
         return dockEdge() == DesktopGeometry.Edge.RIGHT || dockEdge() == DesktopGeometry.Edge.LEFT;
     }
 
+    private float textScale() { return prefs.getInt("taskbarTextPercent", 100) / 100f; }
+    private float buttonScale() { return prefs.getInt("taskbarButtonPercent", 100) / 100f; }
+
+    private void autoSizeTaskbar(TextView view, float baseSp) {
+        view.setSingleLine(true);
+        view.setAutoSizeTextTypeUniformWithConfiguration(4, Math.max(4, Math.round(baseSp * textScale())), 1,
+                android.util.TypedValue.COMPLEX_UNIT_SP);
+    }
+
     private int taskbarThickness() { return samsungTaskbar() ? dp(72) : taskbarHeight(); }
 
     private void updateTaskbarHeight() {
@@ -386,23 +396,26 @@ public class MainActivity extends Activity {
             if (!side) params = new LinearLayout.LayoutParams(bottomDockParams.get(child));
             else if (child instanceof HorizontalScrollView) params = new LinearLayout.LayoutParams(-1, 0, 1);
             else {
-                params = new LinearLayout.LayoutParams(-1, dp(child instanceof LinearLayout ? 80 : 52));
+                params = new LinearLayout.LayoutParams(-1, dp(child instanceof LinearLayout ? Math.max(80, Math.round(64 * textScale())) : Math.max(48, Math.round(52 * (child.getBackground() instanceof NavigationGlyph ? buttonScale() : 1)))));
                 params.setMargins(0, dp(3), 0, dp(3));
             }
             child.setLayoutParams(params);
             if (child instanceof TextView) {
                 TextView button = (TextView) child;
-                button.setSingleLine(true);
-                button.setAutoSizeTextTypeUniformWithConfiguration(10, side ? 22 : 14, 1,
-                        android.util.TypedValue.COMPLEX_UNIT_SP);
+                autoSizeTaskbar(button, child == quickSettings && side ? 12 : side ? 22 : 14);
+                if (child.getBackground() instanceof NavigationGlyph) child.getBackground().invalidateSelf();
             }
         }
-        int clockGravity = edge == DesktopGeometry.Edge.RIGHT ? Gravity.LEFT
-                : edge == DesktopGeometry.Edge.LEFT ? Gravity.RIGHT : Gravity.END;
-        trayTime.setGravity(clockGravity | Gravity.CENTER_VERTICAL);
-        trayDate.setGravity(clockGravity | Gravity.CENTER_VERTICAL);
-        trayContainer.setGravity(clockGravity | Gravity.CENTER_VERTICAL);
-        trayContainer.setPadding(dp(side ? 2 : 6), 0, dp(side ? 2 : 4), dp(side ? 12 : 0));
+        String batteryText = quickSettings.getText().toString().replace(" ▾", "");
+        if (batteryText.contains("%")) quickSettings.setText(side ? batteryText : batteryText + " ▾");
+        trayTime.setGravity(Gravity.CENTER);
+        trayDate.setGravity(Gravity.CENTER);
+        trayContainer.setGravity(Gravity.CENTER);
+        trayContainer.setPadding(dp(2), 0, dp(2), dp(side ? 16 : 0));
+        trayTime.setFormat12Hour("h:mm");
+        trayTime.setFormat24Hour("HH:mm");
+        autoSizeTaskbar(trayTime, side ? 20 : 16);
+        autoSizeTaskbar(trayDate, 12);
         trayDate.setFormat12Hour(side ? "MMM d" : "EEE, MMM d");
         trayDate.setFormat24Hour(side ? "MMM d" : "EEE, MMM d");
         FrameLayout.LayoutParams workspaceParams = (FrameLayout.LayoutParams) workspace.getLayoutParams();
@@ -453,6 +466,8 @@ public class MainActivity extends Activity {
         SeekBar desktopSize = addSizeSetting(settings, "Desktop shortcut icons", MIN_SHORTCUT_ICON_SIZE,
                 MAX_SHORTCUT_ICON_SIZE, shortcutIconSize());
 
+        SeekBar taskbarText = addPercentSetting(settings, "Taskbar text", prefs.getInt("taskbarTextPercent", 100));
+        SeekBar taskbarButtons = addPercentSetting(settings, "Apps / Back / Home / Recents buttons", prefs.getInt("taskbarButtonPercent", 100));
         settings.addView(label("Taskbar app icons", 17));
         RadioGroup taskbarSource = new RadioGroup(this);
         RadioButton dexlike = new RadioButton(this);
@@ -516,7 +531,8 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Dexlike Launcher settings").setView(settingsScroll)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Save", (dialog, which) -> {
-                    prefs.edit().putString("samsungControlEdge", edges[controlEdge.getSelectedItemPosition()]).putBoolean("samsungTaskbar", samsung.isChecked()).putBoolean("drawerIconGrid", iconGrid.isChecked())
+                    prefs.edit().putInt("taskbarTextPercent", 50 + taskbarText.getProgress())
+                            .putInt("taskbarButtonPercent", 50 + taskbarButtons.getProgress()).putString("samsungControlEdge", edges[controlEdge.getSelectedItemPosition()]).putBoolean("samsungTaskbar", samsung.isChecked()).putBoolean("drawerIconGrid", iconGrid.isChecked())
                             .putBoolean("suppressSystemBars", suppressBars.isChecked()).putInt("taskbarIconSize", MIN_TASKBAR_ICON_SIZE + taskbarSize.getProgress())
                             .putInt("shortcutIconSize", MIN_SHORTCUT_ICON_SIZE + desktopSize.getProgress()).apply();
                     dock.setTranslationY(0);
@@ -527,6 +543,21 @@ public class MainActivity extends Activity {
                     suppressSystemBars();
                     if (drawerOpen) { toggleDrawer(); toggleDrawer(); }
                 }).show();
+    }
+
+    private SeekBar addPercentSetting(LinearLayout parent, String name, int percent) {
+        TextView value = label(name + " · " + percent + "%", 15);
+        parent.addView(value);
+        SeekBar slider = new SeekBar(this);
+        slider.setContentDescription(name);
+        slider.setMax(100); slider.setProgress(Math.max(0, Math.min(100, percent - 50)));
+        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int progress, boolean user) { value.setText(name + " · " + (progress + 50) + "%"); }
+            @Override public void onStartTrackingTouch(SeekBar bar) { }
+            @Override public void onStopTrackingTouch(SeekBar bar) { }
+        });
+        parent.addView(slider, new LinearLayout.LayoutParams(-1, dp(40)));
+        return slider;
     }
 
     private SeekBar addSizeSetting(LinearLayout parent, String name, int min, int max, int size) {
@@ -569,7 +600,7 @@ public class MainActivity extends Activity {
         if (dockApps != null) dockApps.setVisibility(samsungTaskbar() ? View.GONE : View.VISIBLE);
         if (dockApps == null) return;
         String pinned = prefs.getString("pinned", "");
-        StringBuilder signature = new StringBuilder(pinned).append(taskbarIconSize()).append(windowSnapshotAvailable).append(icons.version());
+        StringBuilder signature = new StringBuilder(pinned).append(taskbarIconSize()).append(prefs.getInt("taskbarTextPercent", 100)).append(windowSnapshotAvailable).append(icons.version());
         List<String> taskKeys = new ArrayList<>();
         for (RunningWindow window : runningWindows) taskKeys.add(window.packageName + "/" + window.id);
         java.util.Collections.sort(taskKeys);
@@ -581,6 +612,14 @@ public class MainActivity extends Activity {
         hoverActions.clear();
         if (windowChooser != null) windowChooser.dismiss();
         dockApps.removeAllViews();
+        if (!windowSnapshotAvailable) {
+            TextView reconnect = label("Connect Shizuku", 12);
+            reconnect.setGravity(Gravity.CENTER);
+            reconnect.setPadding(dp(8), 0, dp(8), 0);
+            reconnect.setContentDescription(windowStatus + ". Connect Shizuku");
+            reconnect.setOnClickListener(v -> windowTracker.requestAccess());
+            dockApps.addView(reconnect, new LinearLayout.LayoutParams(-2, -1));
+        }
         int iconSize = dp(taskbarIconSize());
         LinkedHashMap<String, ResolveInfo> groups = new LinkedHashMap<>();
         if (!pinned.isEmpty()) for (String key : pinned.split("\\|")) {
@@ -604,12 +643,13 @@ public class MainActivity extends Activity {
             catch (PackageManager.NameNotFoundException ignored) { icon.setImageResource(android.R.drawable.sym_def_app_icon); }
             entry.addView(icon, new LinearLayout.LayoutParams(iconSize, iconSize));
             List<RunningWindow> windows = windowsFor(packageName);
-            TextView name = label(title + (windows.isEmpty() ? "" : " · " + windows.size()), 10);
+            TextView name = label(title + (windows.isEmpty() ? "" : " · " + windows.size()), Math.round(10 * textScale()));
             name.setSingleLine(true); name.setGravity(Gravity.CENTER);
             name.setPadding(dp(2), 0, dp(2), 0);
             entry.addView(name, new LinearLayout.LayoutParams(dp(Math.max(90, taskbarIconSize() + 8)), dp(20)));
             entry.setContentDescription(title + (windows.isEmpty() ? "" : ", " + windows.size() + " open windows"));
             entry.setOnClickListener(v -> {
+                if (!windowTracker.ready()) { windowTracker.requestAccess(); return; }
                 List<RunningWindow> current = windowsFor(packageName);
                 RunningWindow selected = null;
                 for (RunningWindow window : current) if (window.id == lastFocusedWindow && window.visible) selected = window;
@@ -802,10 +842,14 @@ public class MainActivity extends Activity {
     }
 
     Rect desktopWorkArea() {
-        if (root == null || root.getWidth() <= 0 || root.getHeight() <= taskbarHeight()) return null;
-        int[] origin = new int[2];
-        root.getLocationOnScreen(origin);
-        int[] area = DesktopGeometry.workArea(origin[0], origin[1], root.getWidth(), root.getHeight(),
+        Rect display;
+        if (Build.VERSION.SDK_INT >= 30) display = getWindowManager().getMaximumWindowMetrics().getBounds();
+        else {
+            android.graphics.Point size = new android.graphics.Point();
+            getWindowManager().getDefaultDisplay().getRealSize(size);
+            display = new Rect(0, 0, size.x, size.y);
+        }
+        int[] area = DesktopGeometry.workArea(display.left, display.top, display.width(), display.height(),
                 taskbarThickness(), dockEdge());
         return new Rect(area[0], area[1], area[2], area[3]);
     }

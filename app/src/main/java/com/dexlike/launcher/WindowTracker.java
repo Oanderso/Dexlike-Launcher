@@ -26,6 +26,9 @@ final class WindowTracker {
     private ITaskService service;
     private boolean active, binding, busy, closed;
     private int generation;
+    private List<RunningWindow> lastKnown = new ArrayList<>();
+
+    private void showStatus(String status) { listener.changed(new ArrayList<>(lastKnown), status); }
     private final Runnable poll = this::refresh;
     private final Runnable reconnect = this::connect;
     private IBinder watchedBinder;
@@ -51,7 +54,7 @@ final class WindowTracker {
         if (code == 71) main.post(() -> {
             if (closed) return;
             if (result == PackageManager.PERMISSION_GRANTED) connect();
-            else listener.changed(new ArrayList<>(), "Shizuku permission denied");
+            else showStatus("Shizuku permission denied");
         });
     }
     private final ServiceConnection connection = new ServiceConnection() {
@@ -77,6 +80,11 @@ final class WindowTracker {
 
     WindowTracker(MainActivity activity, Listener listener) {
         this.activity = activity; this.listener = listener;
+        try {
+            JSONArray cached = new JSONArray(activity.getSharedPreferences("desktop", 0).getString("taskCache", "[]"));
+            for (int i = 0; i < cached.length(); i++) lastKnown.add(new RunningWindow(cached.getJSONObject(i)));
+        } catch (Exception ignored) { }
+        main.post(() -> { if (!closed) showStatus("Connecting Shizuku; saved windows shown until refreshed"); });
         args = new Shizuku.UserServiceArgs(new ComponentName(activity, TaskService.class))
                 .daemon(true).processNameSuffix("windows").version(serviceVersion());
         Shizuku.addBinderReceivedListenerSticky(received);
@@ -90,21 +98,21 @@ final class WindowTracker {
     }
 
     void start() { active = true; connect(); refresh(); }
-    void stop() { active = false; main.removeCallbacks(poll); }
+    void stop() { /* Keep task updates alive while native windows cover/minimize the launcher. */ }
     boolean ready() { return service != null && service.asBinder().isBinderAlive(); }
 
     void requestAccess() {
         try {
             if (!Shizuku.pingBinder()) {
-                listener.changed(new ArrayList<>(), "Start Shizuku first, then connect again");
+                showStatus("Start Shizuku first, then connect again");
             } else if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
                 if (!ready() && service != null) disconnected();
                 connect(); refresh();
             }
             else if (Shizuku.shouldShowRequestPermissionRationale()) {
-                listener.changed(new ArrayList<>(), "Allow Dexlike in Shizuku’s authorized applications");
+                showStatus("Allow Dexlike in Shizuku’s authorized applications");
             } else Shizuku.requestPermission(71);
-        } catch (RuntimeException error) { listener.changed(new ArrayList<>(), "Shizuku is unavailable"); }
+        } catch (RuntimeException error) { showStatus("Shizuku is unavailable"); }
     }
 
     private void connect() {
@@ -122,17 +130,18 @@ final class WindowTracker {
                         binding = false;
                         try { Shizuku.unbindUserService(args, connection, false); }
                         catch (RuntimeException ignored) { }
-                        listener.changed(new ArrayList<>(), "Shizuku connection timed out; retrying");
+                        showStatus("Shizuku connection timed out; retrying");
                         main.postDelayed(reconnect, 3000);
                     }
                 }, 10000);
             } else {
+                showStatus(Shizuku.pingBinder() ? "Allow Dexlike in Shizuku to restore window controls" : "Shizuku is stopped; start it to restore window controls");
                 main.postDelayed(reconnect, 5000);
             }
         } catch (RuntimeException error) {
             main.postDelayed(reconnect, 5000);
             binding = false;
-            listener.changed(new ArrayList<>(), "Could not connect to Shizuku");
+            showStatus("Could not connect to Shizuku");
         }
     }
 
@@ -145,7 +154,7 @@ final class WindowTracker {
         main.removeCallbacks(reconnect);
         if (active) main.postDelayed(reconnect, 1500);
         main.removeCallbacks(poll);
-        listener.changed(new ArrayList<>(), "Shizuku disconnected; reconnecting when the server is available (Android 16 needs Shizuku 13.6+)");
+        showStatus("Shizuku disconnected; reconnecting when the server is available (Android 16 needs Shizuku 13.6+)");
     }
 
     void refresh() {
@@ -159,31 +168,40 @@ final class WindowTracker {
         Rect area = activity.desktopWorkArea();
         worker.execute(() -> {
             List<RunningWindow> windows = new ArrayList<>();
+            String cache = null;
             String status = "Connected — tracking windows";
             try {
                 JSONObject snapshot = new JSONObject(remote.snapshot(display, user));
                 if (snapshot.has("error")) throw new IllegalStateException(snapshot.getString("error"));
                 JSONArray tasks = snapshot.getJSONArray("tasks");
+                cache = tasks.toString();
                 for (int i = 0; i < tasks.length(); i++) {
                     RunningWindow window = new RunningWindow(tasks.getJSONObject(i));
                     if (window.id >= 0 && !window.packageName.isEmpty()) windows.add(window);
                 }
                 if (area != null) {
-                    String error = remote.fitWindows(display, user, area.left, area.top, area.right, area.bottom);
+                    remote.monitorWindows(display, user, area.left, area.top, area.right, area.bottom, true);
+                    String error = snapshot.optString("fitError", "");
                     if (!error.isEmpty()) status = "Tracking windows; resizing unavailable: " + error;
                 }
             } catch (Exception error) {
                 checkFailure(remote);
                 status = "Window tracking unavailable: " + error.getMessage();
+                cache = null;
                 windows.clear();
             }
             final String message = status;
+            final String savedTasks = cache;
             main.post(() -> {
                 busy = false;
                 if (closed) return;
                 if (version != generation) { if (active) refresh(); return; }
                 if (active) {
-                    listener.changed(windows, message);
+                    if (savedTasks != null) {
+                        lastKnown = new ArrayList<>(windows);
+                        activity.getSharedPreferences("desktop", 0).edit().putString("taskCache", savedTasks).apply();
+                    }
+                    listener.changed(new ArrayList<>(lastKnown), message);
                     main.postDelayed(poll, 2000);
                 }
             });
@@ -341,6 +359,13 @@ final class WindowTracker {
         Shizuku.removeBinderReceivedListener(received);
         Shizuku.removeBinderDeadListener(died);
         Shizuku.removeRequestPermissionResultListener(permission);
+        if (service != null && activity.isFinishing() && !activity.isChangingConfigurations()) {
+            ITaskService remote = service;
+            worker.execute(() -> {
+                try { remote.monitorWindows(0, 0, 0, 0, 0, 0, false); }
+                catch (Exception ignored) { }
+            });
+        }
         forgetBinder();
         if (service != null || binding) {
             // Activity recreation must not kill the service used by the replacement Activity.
@@ -348,6 +373,6 @@ final class WindowTracker {
             catch (RuntimeException ignored) { }
         }
         service = null;
-        worker.shutdownNow();
+        worker.shutdown();
     }
 }

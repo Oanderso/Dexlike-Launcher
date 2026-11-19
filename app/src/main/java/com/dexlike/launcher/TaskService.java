@@ -13,7 +13,23 @@ import java.util.List;
 
 /** Runs only in Shizuku's shell-identity user-service process, where hidden APIs are allowed. */
 public final class TaskService extends ITaskService.Stub {
-    public TaskService() { }
+    private volatile int[] monitoredArea;
+    private volatile String fittingError = "";
+    private final java.util.concurrent.ScheduledExecutorService fitter = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+
+    public TaskService() {
+        fitter.scheduleWithFixedDelay(() -> {
+            int[] area = monitoredArea;
+            if (area == null) return;
+            try { fittingError = fitWindows(area[0], area[1], area[2], area[3], area[4], area[5]); }
+            catch (RuntimeException error) { fittingError = error.toString(); }
+        }, 0, 500, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    @Override public void monitorWindows(int display, int user, int left, int top, int right, int bottom, boolean enabled) {
+        monitoredArea = enabled && right > left && bottom > top ? new int[]{display, user, left, top, right, bottom} : null;
+        if (!enabled) fittingError = "";
+    }
 
     // Shizuku documents that non-SDK restrictions do not apply to its user-service process.
     @android.annotation.SuppressLint("BlockedPrivateApi")
@@ -104,7 +120,7 @@ public final class TaskService extends ITaskService.Stub {
                         .put("mode", mode(task)).put("left", bounds.left).put("top", bounds.top)
                         .put("right", bounds.right).put("bottom", bounds.bottom));
             }
-            return new JSONObject().put("tasks", list).toString();
+            return new JSONObject().put("tasks", list).put("fitError", fittingError).toString();
         } catch (Exception error) { return error(error); }
     }
 
@@ -140,7 +156,6 @@ public final class TaskService extends ITaskService.Stub {
         if (right <= left || bottom <= top) return "";
         try {
             Object service = manager();
-            Rect area = new Rect(left, top, right, bottom);
             android.graphics.Point screen = new android.graphics.Point(right, bottom);
             android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
             metrics.density = 1;
@@ -152,7 +167,8 @@ public final class TaskService extends ITaskService.Stub {
                 deviceDisplay.getRealMetrics(metrics);
             } catch (ReflectiveOperationException ignored) { }
             int tolerance = Math.round(96 * metrics.density);
-            for (TaskInfo task : tasks(service, display, user)) {
+            String lastError = "";
+            for (TaskInfo task : liveTasks(service, display)) {
                 if (!eligible(task, display, user) || mode(task) != 5 || !task.isRunning || task.numActivities == 0) continue;
                 Rect original = bounds(task);
                 if (original.isEmpty()) continue;
@@ -160,10 +176,11 @@ public final class TaskService extends ITaskService.Stub {
                         left, top, right, bottom, screen.x, screen.y, tolerance);
                 Rect fitted = new Rect(fittedBounds[0], fittedBounds[1], fittedBounds[2], fittedBounds[3]);
                 if (!original.equals(fitted)) {
-                    resizeWindow(service, task, fitted);
+                    try { resizeWindow(service, task, fitted); }
+                    catch (Exception error) { lastError = "Task " + task.taskId + ": " + message(error); }
                 }
             }
-            return "";
+            return lastError;
         } catch (Exception error) { return message(error); }
     }
 
@@ -303,5 +320,5 @@ public final class TaskService extends ITaskService.Stub {
         } catch (Exception error) { return message(error); }
     }
 
-    @Override public void destroy() { System.exit(0); }
+    @Override public void destroy() { fitter.shutdownNow(); System.exit(0); }
 }
