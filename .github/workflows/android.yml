@@ -46,10 +46,12 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-      - name: Verify widget corner resize geometry
+      - name: Verify desktop and widget geometry
         run: |
           javac -d "$RUNNER_TEMP/resize-tests" app/src/main/java/com/dexlike/launcher/WidgetResizeBounds.java tests/WidgetResizeBoundsTest.java
           java -cp "$RUNNER_TEMP/resize-tests" com.dexlike.launcher.WidgetResizeBoundsTest
+          javac -d "$RUNNER_TEMP/resize-tests" app/src/main/java/com/dexlike/launcher/DesktopGeometry.java tests/DesktopGeometryTest.java
+          java -cp "$RUNNER_TEMP/resize-tests" com.dexlike.launcher.DesktopGeometryTest
 
       - name: Compile preview APK
         if: github.ref != 'refs/heads/main' || github.event_name == 'pull_request'

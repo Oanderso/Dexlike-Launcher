@@ -132,6 +132,10 @@ final class DesktopWorkspace extends FrameLayout {
         addDesktopMenuEntry(entries, menu, "Add app", activity::chooseDesktopApp);
         addDesktopMenuEntry(entries, menu, "Add widget", this::chooseWidget);
         addDesktopMenuEntry(entries, menu, "Settings", activity::showDesktopSettings);
+        addDesktopMenuEntry(entries, menu, "Use system wallpaper", () -> {
+            prefs.edit().putBoolean("systemWallpaper", true).apply();
+            loadWallpaper();
+        });
         addDesktopMenuEntry(entries, menu, "Choose wallpaper", () -> {
             Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*")
                     .addCategory(Intent.CATEGORY_OPENABLE);
@@ -181,13 +185,16 @@ final class DesktopWorkspace extends FrameLayout {
                         Intent.FLAG_GRANT_READ_URI_PERMISSION);
             } catch (SecurityException ignored) { }
         }
-        prefs.edit().putString("wallpaper", next == null ? null : next.toString()).apply();
+        prefs.edit().putBoolean("systemWallpaper", next == null)
+                .putString("wallpaper", next == null ? null : next.toString()).apply();
         loadWallpaper();
     }
 
     private void loadWallpaper() {
         final int version = ++wallpaperVersion;
-        String source = prefs.getString("wallpaper", null);
+        boolean system = prefs.getBoolean("systemWallpaper", !prefs.contains("wallpaper"));
+        activity.useSystemWallpaper(system);
+        String source = system ? null : prefs.getString("wallpaper", null);
         if (source == null) {
             wallpaper.setImageDrawable(null);
             return;
@@ -431,6 +438,16 @@ final class DesktopWorkspace extends FrameLayout {
             for (int column = Math.min(GRID_MARGIN, maxX); column <= maxX; column += SHORTCUT_WIDTH) {
                 Point slot = new Point(column, row);
                 if (occupied.contains(slot)) continue;
+                boolean onWidget = false;
+                for (Item widget : items) {
+                    if (widget.widget == -1 || widget.view == null) continue;
+                    LayoutParams bounds = (LayoutParams) widget.view.getLayoutParams();
+                    if (DesktopGeometry.overlaps(column, row, item.width, item.height,
+                            units(bounds.leftMargin), units(bounds.topMargin), units(bounds.width), units(bounds.height))) {
+                        onWidget = true; break;
+                    }
+                }
+                if (onWidget) continue;
                 long dx = column - x;
                 long dy = row - y;
                 long distance = dx * dx + dy * dy;
@@ -669,7 +686,11 @@ final class DesktopWorkspace extends FrameLayout {
                         return true;
                     case MotionEvent.ACTION_UP:
                         view.getParent().requestDisallowInterceptTouchEvent(false);
-                        if (dragging) save();
+                        if (dragging) {
+                            layoutShortcuts();
+                            rememberVisibleShortcutSlots();
+                            save();
+                        }
                         else view.performClick();
                         return true;
                     case MotionEvent.ACTION_CANCEL:
@@ -764,6 +785,8 @@ final class DesktopWorkspace extends FrameLayout {
                             item.view.setLayoutParams(params(item));
                             rememberVisibleShortcutSlots();
                         }
+                        layoutShortcuts();
+                        rememberVisibleShortcutSlots();
                         save();
                         return true;
                     case MotionEvent.ACTION_CANCEL:
@@ -818,6 +841,8 @@ final class DesktopWorkspace extends FrameLayout {
         menu.getMenu().add(title).setOnMenuItemClickListener(option -> {
             resize(item, item.width + widthDelta, item.height + heightDelta);
             item.view.setLayoutParams(params(item));
+            layoutShortcuts();
+            rememberVisibleShortcutSlots();
             save();
             return true;
         });

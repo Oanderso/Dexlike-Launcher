@@ -24,6 +24,10 @@ import android.os.Bundle;
 import android.os.Build;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.view.MotionEvent;
+import android.view.WindowManager;
+import android.graphics.drawable.ColorDrawable;
+import java.util.LinkedHashMap;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.*;
@@ -49,6 +53,14 @@ public class MainActivity extends Activity {
     private final ArrayList<String> recent = new ArrayList<>();
     private LinearLayout dockApps;
     private DesktopWorkspace workspace;
+    private WindowTracker windowTracker;
+    private List<RunningWindow> runningWindows = new ArrayList<>();
+    private String windowStatus = "Connect Shizuku to track and restore every app window";
+    private boolean windowSnapshotAvailable;
+    private PopupWindow windowChooser;
+    private TextView windowStatusView;
+    private final ArrayList<Runnable> hoverActions = new ArrayList<>();
+    private String dockSignature = "";
     private TextView quickSettings;
     private final BroadcastReceiver battery = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -77,6 +89,15 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("desktop", MODE_PRIVATE);
         loadApps();
         buildDesktop(savedInstanceState);
+        windowTracker = new WindowTracker(this, (windows, status) -> {
+            runningWindows = windows;
+            windowStatus = status;
+            windowSnapshotAvailable = status.startsWith("Connected") || status.startsWith("Tracking windows");
+            if (windowStatusView != null) windowStatusView.setText(status);
+            renderDockApps();
+            if (windowChooser != null && windowChooser.isShowing()
+                    && !windowSnapshotAvailable) windowChooser.dismiss();
+        });
         if (Build.VERSION.SDK_INT >= 30) {
             root.setOnApplyWindowInsetsListener((view, insets) -> {
                 if (insets.isVisible(WindowInsets.Type.navigationBars())) scheduleBarSuppression();
@@ -238,12 +259,20 @@ public class MainActivity extends Activity {
         return dp(Math.max(64, taskbarIconSize() + 34));
     }
 
+    void useSystemWallpaper(boolean system) {
+        getWindow().setBackgroundDrawable(new ColorDrawable(system ? Color.TRANSPARENT : background));
+        root.setBackgroundColor(system ? Color.TRANSPARENT : background);
+        if (system) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER);
+    }
+
     private void updateTaskbarHeight() {
         FrameLayout.LayoutParams dockParams = (FrameLayout.LayoutParams) dock.getLayoutParams();
         dockParams.height = taskbarHeight();
         dock.setLayoutParams(dockParams);
         updateBottomMargin(workspace);
         if (drawer != null) updateBottomMargin(drawer);
+        root.post(() -> { if (windowTracker != null) windowTracker.refresh(); });
     }
 
     private void updateBottomMargin(View view) {
@@ -288,7 +317,17 @@ public class MainActivity extends Activity {
         settings.addView(suppressBars);
         TextView explanation = label("Samsung may briefly reveal its taskbar. Applies while Dexlike is focused.", 12);
         settings.addView(explanation);
-        new AlertDialog.Builder(this).setTitle("Dexlike Launcher settings").setView(settings)
+        windowStatusView = label(windowStatus, 12);
+        settings.addView(windowStatusView);
+        Button connectWindows = new Button(this);
+        connectWindows.setText("Connect window tracking with Shizuku");
+        connectWindows.setOnClickListener(v -> windowTracker.requestAccess());
+        settings.addView(connectWindows);
+        TextView windowExplanation = label("Start Shizuku and allow Dexlike to list and restore individual windows. Samsung controls maximized window sizes.", 12);
+        settings.addView(windowExplanation);
+        ScrollView settingsScroll = new ScrollView(this);
+        settingsScroll.addView(settings);
+        new AlertDialog.Builder(this).setTitle("Dexlike Launcher settings").setView(settingsScroll)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Save", (dialog, which) -> {
                     prefs.edit().putBoolean("suppressSystemBars", suppressBars.isChecked()).putInt("taskbarIconSize", MIN_TASKBAR_ICON_SIZE + taskbarSize.getProgress())
@@ -319,34 +358,127 @@ public class MainActivity extends Activity {
         return slider;
     }
 
+    private List<RunningWindow> windowsFor(String packageName) {
+        List<RunningWindow> result = new ArrayList<>();
+        for (RunningWindow window : runningWindows) if (packageName.equals(window.packageName)) result.add(window);
+        return result;
+    }
+
+    private ResolveInfo launcherFor(String packageName) {
+        for (ResolveInfo app : apps) if (packageName.equals(app.activityInfo.packageName)) return app;
+        return null;
+    }
+
+    private String appTitle(String packageName, ResolveInfo app) {
+        if (app != null) return app.loadLabel(getPackageManager()).toString();
+        try { return getPackageManager().getApplicationLabel(getPackageManager().getApplicationInfo(packageName, 0)).toString(); }
+        catch (PackageManager.NameNotFoundException ignored) { return packageName; }
+    }
+
     private void renderDockApps() {
+        if (dockApps == null) return;
+        String pinned = prefs.getString("pinned", "");
+        StringBuilder signature = new StringBuilder(pinned).append(taskbarIconSize()).append(windowSnapshotAvailable);
+        for (RunningWindow window : runningWindows) signature.append('|').append(window.id).append(window.packageName)
+                .append(window.label).append(window.minimized);
+        if (!windowSnapshotAvailable) signature.append(recent.toString());
+        if (dockSignature.equals(signature.toString())) return;
+        dockSignature = signature.toString();
+        for (Runnable action : hoverActions) root.removeCallbacks(action);
+        hoverActions.clear();
+        if (windowChooser != null) windowChooser.dismiss();
         dockApps.removeAllViews();
         int iconSize = dp(taskbarIconSize());
-        String pinned = prefs.getString("pinned", "");
-        ArrayList<String> visible = new ArrayList<>();
-        if (!pinned.isEmpty()) for (String key : pinned.split("\\|")) if (find(key) != null && !visible.contains(key)) visible.add(key);
-        for (String key : recent) if (find(key) != null && !visible.contains(key)) visible.add(key);
-        for (String key : visible) {
+        LinkedHashMap<String, ResolveInfo> groups = new LinkedHashMap<>();
+        if (!pinned.isEmpty()) for (String key : pinned.split("\\|")) {
             ResolveInfo app = find(key);
+            if (app != null) groups.putIfAbsent(app.activityInfo.packageName, app);
+        }
+        for (RunningWindow window : runningWindows) groups.putIfAbsent(window.packageName, launcherFor(window.packageName));
+        // Launch history is explicitly a fallback, never presented as a list of real windows.
+        if (!windowSnapshotAvailable) for (String key : recent) {
+            ResolveInfo app = find(key);
+            if (app != null) groups.putIfAbsent(app.activityInfo.packageName, app);
+        }
+        for (String packageName : groups.keySet()) {
+            ResolveInfo app = groups.get(packageName);
+            String title = appTitle(packageName, app);
             LinearLayout entry = new LinearLayout(this);
             entry.setOrientation(LinearLayout.VERTICAL);
             entry.setGravity(Gravity.CENTER);
             ImageView icon = new ImageView(this);
-            icon.setImageDrawable(app.loadIcon(getPackageManager()));
+            try { icon.setImageDrawable(app != null ? app.loadIcon(getPackageManager()) : getPackageManager().getApplicationIcon(packageName)); }
+            catch (PackageManager.NameNotFoundException ignored) { icon.setImageResource(android.R.drawable.sym_def_app_icon); }
             entry.addView(icon, new LinearLayout.LayoutParams(iconSize, iconSize));
-            TextView name = label(app.loadLabel(getPackageManager()).toString(), 10);
+            List<RunningWindow> windows = windowsFor(packageName);
+            TextView name = label(title + (windows.isEmpty() ? "" : " · " + windows.size()), 10);
             name.setSingleLine(true); name.setGravity(Gravity.CENTER);
             name.setPadding(dp(2), 0, dp(2), 0);
             entry.addView(name, new LinearLayout.LayoutParams(dp(90), dp(20)));
-            entry.setOnClickListener(v -> launch(app));
-            if (recent.contains(key)) {
+            entry.setContentDescription(title + (windows.isEmpty() ? "" : ", " + windows.size() + " open windows"));
+            entry.setOnClickListener(v -> {
+                if (!windowsFor(packageName).isEmpty()) showWindows(entry, packageName);
+                else if (app != null) launch(app);
+            });
+            if (!windows.isEmpty()) {
                 View indicator = new View(this);
                 indicator.setBackgroundColor(0xFF98BDE9);
                 entry.addView(indicator, new LinearLayout.LayoutParams(dp(16), dp(2)));
             }
-            bindAppMenu(entry, app);
+            Runnable show = () -> { if (entry.isAttachedToWindow() && hasWindowFocus()) showWindows(entry, packageName); };
+            hoverActions.add(show);
+            entry.setOnHoverListener((v, event) -> {
+                if (event.getActionMasked() == MotionEvent.ACTION_HOVER_ENTER) root.postDelayed(show, 2000);
+                if (event.getActionMasked() == MotionEvent.ACTION_HOVER_EXIT) root.removeCallbacks(show);
+                return false;
+            });
+            entry.setOnLongClickListener(v -> {
+                if (!windowsFor(packageName).isEmpty()) showWindows(entry, packageName);
+                else if (app != null) showAppMenu(v, app);
+                return true;
+            });
+            if (app != null) entry.setOnContextClickListener(v -> { showAppMenu(v, app); return true; });
             dockApps.addView(entry, new LinearLayout.LayoutParams(dp(98), -1));
         }
+    }
+
+    private void showWindows(View anchor, String packageName) {
+        List<RunningWindow> windows = windowsFor(packageName);
+        if (windows.isEmpty()) return;
+        if (windowChooser != null) windowChooser.dismiss();
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(8), dp(8), dp(8), dp(8));
+        list.setBackgroundColor(surface);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list);
+        PopupWindow chooser = new PopupWindow(scroll, Math.min(dp(360), root.getWidth()), -2, true);
+        windowChooser = chooser;
+        chooser.setBackgroundDrawable(new ColorDrawable(surface));
+        chooser.setElevation(dp(12));
+        chooser.setOutsideTouchable(true);
+        for (RunningWindow window : windows) {
+            String title = window.label.isEmpty() ? appTitle(packageName, launcherFor(packageName)) : window.label;
+            TextView row = label(title + "\nWindow " + window.id + (window.minimized ? " · Minimized" : ""), 14);
+            row.setMaxLines(2);
+            row.setFocusable(true);
+            row.setBackgroundResource(android.R.drawable.list_selector_background);
+            row.setOnClickListener(v -> { chooser.dismiss(); windowTracker.restore(window); });
+            list.addView(row, new LinearLayout.LayoutParams(-1, dp(64)));
+        }
+        ResolveInfo app = launcherFor(packageName);
+        if (app != null) {
+            TextView create = label("Open new window", 14);
+            create.setOnClickListener(v -> { chooser.dismiss(); launch(app, Placement.DEFAULT, true); });
+            list.addView(create, new LinearLayout.LayoutParams(-1, dp(48)));
+        }
+        int height = Math.min(Math.max(dp(64), dock.getTop()), windows.size() * dp(64) + dp(app == null ? 16 : 64));
+        chooser.setHeight(height);
+        int[] origin = new int[2], location = new int[2];
+        root.getLocationInWindow(origin); anchor.getLocationInWindow(location);
+        chooser.showAtLocation(root, Gravity.TOP | Gravity.LEFT,
+                Math.max(origin[0], Math.min(location[0], origin[0] + root.getWidth() - chooser.getWidth())),
+                Math.max(origin[1], origin[1] + dock.getTop() - height));
     }
 
     private void bindAppMenu(View anchor, ResolveInfo app) {
@@ -366,6 +498,14 @@ public class MainActivity extends Activity {
         PopupMenu menu = new PopupMenu(this, anchor);
         menu.getMenu().add(pinned ? "Unpin from dock" : "Pin to dock")
                 .setOnMenuItemClickListener(item -> { togglePin(appKey); return true; });
+        if (!windowsFor(app.activityInfo.packageName).isEmpty()) {
+            menu.getMenu().add("Show open windows").setOnMenuItemClickListener(item -> {
+                showWindows(anchor, app.activityInfo.packageName); return true;
+            });
+        }
+        menu.getMenu().add("Open new window").setOnMenuItemClickListener(item -> {
+            launch(app, Placement.DEFAULT, true); return true;
+        });
         menu.getMenu().add("Add to desktop").setOnMenuItemClickListener(item -> {
             workspace.addShortcut(app);
             if (drawerOpen) toggleDrawer();
@@ -410,11 +550,17 @@ public class MainActivity extends Activity {
     // Keep the existing optional windowing request and fall back when the device blocks it.
     @android.annotation.SuppressLint("BlockedPrivateApi")
     private void launch(ResolveInfo app, Placement placement) {
+        launch(app, placement, false);
+    }
+
+    @android.annotation.SuppressLint("BlockedPrivateApi")
+    private void launch(ResolveInfo app, Placement placement, boolean newWindow) {
         String key = key(app);
         Intent intent = new Intent(Intent.ACTION_MAIN);
         intent.addCategory(Intent.CATEGORY_LAUNCHER);
         intent.setComponent(new ComponentName(app.activityInfo.packageName, app.activityInfo.name));
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (newWindow) intent.addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK | Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
         try {
             // Freeform mode is device-dependent; fall back to a normal launch if denied.
             ActivityOptions options = ActivityOptions.makeBasic();
@@ -438,13 +584,17 @@ public class MainActivity extends Activity {
         }
     }
 
-    private Rect launchBounds(Placement placement) {
-        if (placement == Placement.DEFAULT || dock.getTop() <= 0) return null;
-
+    Rect desktopWorkArea() {
+        if (root == null || root.getWidth() <= 0 || root.getHeight() <= taskbarHeight()) return null;
         int[] origin = new int[2];
         root.getLocationOnScreen(origin);
-        Rect workspace = new Rect(origin[0], origin[1],
-                origin[0] + root.getWidth(), origin[1] + dock.getTop());
+        return new Rect(origin[0], origin[1], origin[0] + root.getWidth(),
+                origin[1] + root.getHeight() - taskbarHeight());
+    }
+
+    private Rect launchBounds(Placement placement) {
+        Rect workspace = desktopWorkArea();
+        if (workspace == null) return null;
         int gap = dp(8);
         workspace.inset(gap, gap);
         if (workspace.width() < gap * 2 || workspace.height() < gap * 2) return null;
@@ -457,6 +607,7 @@ public class MainActivity extends Activity {
             case RIGHT:
                 workspace.left = middle + gap / 2;
                 break;
+            case DEFAULT:
             case CENTER:
                 workspace.inset(workspace.width() / 8, workspace.height() / 8);
                 break;
@@ -522,12 +673,16 @@ public class MainActivity extends Activity {
     @Override protected void onStart() {
         super.onStart();
         workspace.onStart();
+        if (windowTracker != null) windowTracker.start();
         registerReceiver(battery, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
     }
 
     @Override protected void onStop() {
         unregisterReceiver(battery);
         workspace.onStop();
+        if (windowTracker != null) windowTracker.stop();
+        for (Runnable action : hoverActions) root.removeCallbacks(action);
+        if (windowChooser != null) windowChooser.dismiss();
         root.removeCallbacks(rehideBars);
         super.onStop();
     }
@@ -575,5 +730,10 @@ public class MainActivity extends Activity {
         if (dock != null) refreshDock();
         scheduleBarSuppression();
     }
+    @Override protected void onDestroy() {
+        if (windowTracker != null) windowTracker.close();
+        super.onDestroy();
+    }
+
     @Override public void onBackPressed() { if (drawerOpen) toggleDrawer(); else super.onBackPressed(); }
 }
