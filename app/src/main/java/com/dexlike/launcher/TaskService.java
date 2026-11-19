@@ -1,6 +1,7 @@
 package com.dexlike.launcher;
 
 import android.app.ActivityManager;
+import android.app.TaskInfo;
 import android.app.ActivityOptions;
 import android.content.ComponentName;
 import android.graphics.Rect;
@@ -27,41 +28,55 @@ public final class TaskService extends ITaskService.Stub {
     }
 
     @SuppressWarnings("unchecked")
-    private List<ActivityManager.RunningTaskInfo> tasks(Object service, int display) throws Exception {
+    private List<TaskInfo> liveTasks(Object service, int display) throws Exception {
         try {
-            return (List<ActivityManager.RunningTaskInfo>) invoke(service, "getTasks",
+            return (List<TaskInfo>) invoke(service, "getTasks",
                     new Class<?>[]{int.class, boolean.class, boolean.class, int.class}, 256, false, false, display);
         } catch (NoSuchMethodException olderAndroid) {
-            return (List<ActivityManager.RunningTaskInfo>) invoke(service, "getTasks",
+            return (List<TaskInfo>) invoke(service, "getTasks",
                     new Class<?>[]{int.class, boolean.class, boolean.class}, 256, false, false);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<TaskInfo> tasks(Object service, int display, int user) throws Exception {
+        java.util.LinkedHashMap<Integer, TaskInfo> result = new java.util.LinkedHashMap<>();
+        for (TaskInfo info : liveTasks(service, display)) result.put(info.taskId, info);
+        Object slice = invoke(service, "getRecentTasks", new Class<?>[]{int.class, int.class, int.class}, 256, 2, user);
+        List<TaskInfo> recent = (List<TaskInfo>) slice.getClass().getMethod("getList").invoke(slice);
+        for (TaskInfo info : recent) if (info.taskId >= 0) result.putIfAbsent(info.taskId, info);
+        return new java.util.ArrayList<>(result.values());
     }
 
     private int integerField(Object object, String name) throws Exception {
         return object.getClass().getField(name).getInt(object);
     }
 
-    private Object windowConfig(ActivityManager.RunningTaskInfo task) throws Exception {
+    private Object windowConfig(TaskInfo task) throws Exception {
         Object configuration = task.getClass().getField("configuration").get(task);
         return configuration.getClass().getField("windowConfiguration").get(configuration);
     }
 
-    private int mode(ActivityManager.RunningTaskInfo task) throws Exception {
+    private int mode(TaskInfo task) throws Exception {
         Object config = windowConfig(task);
         return (Integer) config.getClass().getMethod("getWindowingMode").invoke(config);
     }
 
-    private Rect bounds(ActivityManager.RunningTaskInfo task) throws Exception {
+    private Rect bounds(TaskInfo task) throws Exception {
         Object config = windowConfig(task);
         return new Rect((Rect) config.getClass().getMethod("getBounds").invoke(config));
     }
 
-    private boolean eligible(ActivityManager.RunningTaskInfo task, int display, int user) throws Exception {
+    private ComponentName component(TaskInfo task) {
+        return task.baseActivity != null ? task.baseActivity : task.baseIntent == null ? null : task.baseIntent.getComponent();
+    }
+
+    private boolean eligible(TaskInfo task, int display, int user) throws Exception {
         Object config = windowConfig(task);
         int type = (Integer) config.getClass().getMethod("getActivityType").invoke(config);
         return integerField(task, "displayId") == display && integerField(task, "userId") == user
-                && type == 1 && task.numActivities > 0 && task.baseActivity != null
-                && !"com.dexlike.launcher".equals(task.baseActivity.getPackageName());
+                && type == 1 && task.taskId >= 0 && component(task) != null
+                && !"com.dexlike.launcher".equals(component(task).getPackageName());
     }
 
     @Override public String snapshot(int display, int user) {
@@ -75,14 +90,15 @@ public final class TaskService extends ITaskService.Stub {
                         .getMethod("getMinimizedFreeformTasksForCurrentUser").invoke(samsung);
                 for (Object task : minimizedTasks) minimizedIds.add(integerField(task, "taskId"));
             } catch (Exception ignored) { }
-            for (ActivityManager.RunningTaskInfo task : tasks(service, display)) {
+            for (TaskInfo task : tasks(service, display, user)) {
                 if (!eligible(task, display, user)) continue;
                 Rect bounds = bounds(task);
                 CharSequence label = task.taskDescription == null ? null : task.taskDescription.getLabel();
                 boolean minimized = minimizedIds.contains(task.taskId);
-                list.put(new JSONObject().put("id", task.taskId).put("component", task.baseActivity.flattenToString())
+                list.put(new JSONObject().put("id", task.taskId).put("component", component(task).flattenToString())
                         .put("label", label == null ? "" : label.toString()).put("minimized", minimized)
-                        .put("visible", visible(task)).put("focused", boolField(task, "isFocused"))
+                        .put("retained", !task.isRunning || task.numActivities == 0)
+                        .put("visible", visible(task) && task.isRunning).put("focused", boolField(task, "isFocused"))
                         .put("mode", mode(task)).put("left", bounds.left).put("top", bounds.top)
                         .put("right", bounds.right).put("bottom", bounds.bottom));
             }
@@ -90,8 +106,8 @@ public final class TaskService extends ITaskService.Stub {
         } catch (Exception error) { return error(error); }
     }
 
-    private ActivityManager.RunningTaskInfo task(Object service, int id, int display, int user) throws Exception {
-        for (ActivityManager.RunningTaskInfo task : tasks(service, display)) {
+    private TaskInfo task(Object service, int id, int display, int user) throws Exception {
+        for (TaskInfo task : tasks(service, display, user)) {
             if (task.taskId == id && eligible(task, display, user)) return task;
         }
         throw new IllegalStateException("That window has closed or moved to another display");
@@ -106,7 +122,7 @@ public final class TaskService extends ITaskService.Stub {
     @Override public String restore(int id, int display, int user, int left, int top, int right, int bottom) {
         try {
             Object service = manager();
-            ActivityManager.RunningTaskInfo task = task(service, id, display, user);
+            TaskInfo task = task(service, id, display, user);
             ActivityOptions options = ActivityOptions.makeBasic();
             options.setLaunchDisplayId(display);
             if (mode(task) == 5 && right > left && bottom > top) {
@@ -123,8 +139,8 @@ public final class TaskService extends ITaskService.Stub {
         try {
             Object service = manager();
             Rect area = new Rect(left, top, right, bottom);
-            for (ActivityManager.RunningTaskInfo task : tasks(service, display)) {
-                if (!eligible(task, display, user) || mode(task) != 5) continue;
+            for (TaskInfo task : tasks(service, display, user)) {
+                if (!eligible(task, display, user) || mode(task) != 5 || !task.isRunning || task.numActivities == 0) continue;
                 Rect original = bounds(task);
                 if (original.isEmpty()) continue;
                 Rect fitted = fit(original, area);
@@ -145,9 +161,20 @@ public final class TaskService extends ITaskService.Stub {
         catch (Exception ignored) { return false; }
     }
 
-    private boolean visible(ActivityManager.RunningTaskInfo task) {
+    private boolean visible(TaskInfo task) {
         try { return (Boolean) task.getClass().getMethod("isVisible").invoke(task); }
         catch (Exception ignored) { return boolField(task, "isVisible"); }
+    }
+
+    @Override public String activate(String packageName, int display, int user, int left, int top, int right, int bottom) {
+        try {
+            Object service = manager();
+            for (TaskInfo task : tasks(service, display, user)) {
+                if (eligible(task, display, user) && packageName.equals(component(task).getPackageName()))
+                    return restore(task.taskId, display, user, left, top, right, bottom);
+            }
+            return "NO_TASK";
+        } catch (Exception error) { return message(error); }
     }
 
     @Override public String minimize(int id, int display, int user) {
@@ -163,8 +190,8 @@ public final class TaskService extends ITaskService.Stub {
     @Override public String lowerDesktop(int id, int display, int user) {
         try {
             Object service = manager();
-            ActivityManager.RunningTaskInfo desktop = null;
-            for (ActivityManager.RunningTaskInfo info : tasks(service, display)) {
+            TaskInfo desktop = null;
+            for (TaskInfo info : tasks(service, display, user)) {
                 if (info.taskId == id && integerField(info, "userId") == user && info.baseActivity != null
                         && "com.dexlike.launcher".equals(info.baseActivity.getPackageName())) desktop = info;
             }

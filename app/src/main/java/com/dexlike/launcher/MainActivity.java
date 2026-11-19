@@ -122,6 +122,12 @@ public class MainActivity extends Activity {
             });
         }
         suppressSystemBars();
+        setDesktopInputFocus(false);
+    }
+
+    private void setDesktopInputFocus(boolean focus) {
+        if (focus) getWindow().clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+        else getWindow().addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
     }
 
     int dp(int value) { return (int)(value * getResources().getDisplayMetrics().density + .5f); }
@@ -424,8 +430,10 @@ public class MainActivity extends Activity {
         if (dockApps == null) return;
         String pinned = prefs.getString("pinned", "");
         StringBuilder signature = new StringBuilder(pinned).append(taskbarIconSize()).append(windowSnapshotAvailable).append(icons.version());
-        for (RunningWindow window : runningWindows) signature.append('|').append(window.id).append(window.packageName)
-                .append(window.label).append(window.minimized).append(window.visible);
+        List<String> taskKeys = new ArrayList<>();
+        for (RunningWindow window : runningWindows) taskKeys.add(window.packageName + "/" + window.id);
+        java.util.Collections.sort(taskKeys);
+        signature.append(taskKeys);
         if (!windowSnapshotAvailable) signature.append(recent.toString());
         if (dockSignature.equals(signature.toString())) return;
         dockSignature = signature.toString();
@@ -448,7 +456,7 @@ public class MainActivity extends Activity {
         for (String packageName : groups.keySet()) {
             ResolveInfo app = groups.get(packageName);
             String title = appTitle(packageName, app);
-            LinearLayout entry = new LinearLayout(this);
+            TaskbarEntry entry = new TaskbarEntry(packageName);
             entry.setOrientation(LinearLayout.VERTICAL);
             entry.setGravity(Gravity.CENTER);
             ImageView icon = new ImageView(this);
@@ -471,33 +479,49 @@ public class MainActivity extends Activity {
                     if (only.visible && !only.minimized) windowTracker.minimize(only);
                     else windowTracker.restore(only);
                 } else if (!current.isEmpty()) showWindows(entry, packageName);
-                else if (app != null) launch(app);
+                else if (app != null) windowTracker.activate(packageName, () -> launch(app));
             });
             if (!windows.isEmpty()) {
                 View indicator = new View(this);
                 indicator.setBackgroundColor(0xFF98BDE9);
                 entry.addView(indicator, new LinearLayout.LayoutParams(dp(16), dp(2)));
             }
-            Runnable show = () -> { if (entry.isAttachedToWindow() && hasWindowFocus()) showWindows(entry, packageName); };
-            hoverActions.add(show);
-            entry.setOnHoverListener((v, event) -> {
-                if (event.getActionMasked() == MotionEvent.ACTION_HOVER_ENTER) root.postDelayed(show, 2000);
-                if (event.getActionMasked() == MotionEvent.ACTION_HOVER_EXIT) root.removeCallbacks(show);
-                return false;
-            });
-            entry.setOnLongClickListener(v -> {
-                if (!windowsFor(packageName).isEmpty()) showWindows(entry, packageName);
-                else if (app != null) showAppMenu(v, app);
-                return true;
-            });
             if (app != null) entry.setOnContextClickListener(v -> { showAppMenu(v, app); return true; });
             dockApps.addView(entry, new LinearLayout.LayoutParams(dp(Math.max(98, taskbarIconSize() + 16)), -1));
         }
     }
 
+    private final class TaskbarEntry extends LinearLayout {
+        private boolean hovering;
+        private final Runnable reveal;
+        TaskbarEntry(String packageName) {
+            super(MainActivity.this);
+            reveal = () -> { if (hovering && isAttachedToWindow() && isShown()) showWindows(this, packageName); };
+            setOnLongClickListener(view -> { showWindows(this, packageName); return true; });
+        }
+        @Override public boolean dispatchHoverEvent(MotionEvent event) {
+            if (event.getActionMasked() == MotionEvent.ACTION_HOVER_EXIT) {
+                hovering = false; removeCallbacks(reveal);
+            } else if (!hovering) {
+                hovering = true; postDelayed(reveal, 2000);
+            }
+            return super.dispatchHoverEvent(event);
+        }
+        @Override protected void onDetachedFromWindow() {
+            hovering = false; removeCallbacks(reveal);
+            super.onDetachedFromWindow();
+        }
+    }
+
     private void showWindows(View anchor, String packageName) {
-        List<RunningWindow> windows = windowsFor(packageName);
-        if (windows.isEmpty()) return;
+        windowTracker.forApp(packageName, windows -> {
+            if (!anchor.isAttachedToWindow() || isDestroyed()) return;
+            if (windows.isEmpty()) Toast.makeText(this, "No recoverable app windows", Toast.LENGTH_SHORT).show();
+            else showWindowList(anchor, packageName, windows);
+        });
+    }
+
+    private void showWindowList(View anchor, String packageName, List<RunningWindow> windows) {
         if (windowChooser != null) windowChooser.dismiss();
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
@@ -512,7 +536,7 @@ public class MainActivity extends Activity {
         chooser.setOutsideTouchable(true);
         for (RunningWindow window : windows) {
             String title = window.label.isEmpty() ? appTitle(packageName, launcherFor(packageName)) : window.label;
-            TextView row = label(title + "\nWindow " + window.id + (window.minimized ? " · Minimized" : ""), 14);
+            TextView row = label(title + "\nWindow " + window.id + (window.minimized ? " · Minimized" : window.retained ? " · Previous session" : ""), 14);
             row.setMaxLines(2);
             row.setFocusable(true);
             row.setBackgroundResource(android.R.drawable.list_selector_background);
@@ -676,9 +700,14 @@ public class MainActivity extends Activity {
                     .hideSoftInputFromWindow(drawerSearch.getWindowToken(), 0);
             root.removeView(drawer); drawer = null; drawerSearch = null;
             renderDrawer = null; drawerOpen = false;
+            workspace.setVisibility(View.VISIBLE);
+            setDesktopInputFocus(false);
+            lowerDesktop();
             return;
         }
         drawerOpen = true;
+        setDesktopInputFocus(true);
+        workspace.setVisibility(View.INVISIBLE);
         drawer = new LinearLayout(this);
         drawer.setOrientation(LinearLayout.VERTICAL);
         drawer.setClickable(true);
@@ -813,7 +842,7 @@ public class MainActivity extends Activity {
         super.onWindowFocusChanged(focused);
         if (focused) {
             suppressSystemBars();
-            if (root != null && workspace != null && !workspace.isEditing()) root.post(this::lowerDesktop);
+
         }
         else if (root != null) root.removeCallbacks(rehideBars);
     }

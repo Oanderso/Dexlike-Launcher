@@ -6,7 +6,7 @@ import org.json.JSONObject;
 final class RunningWindow {
     final int id;
     final String packageName, label;
-    final boolean minimized, visible, focused;
+    final boolean minimized, visible, focused, retained;
 
     RunningWindow(JSONObject task) {
         id = task.optInt("id", -1);
@@ -16,5 +16,6 @@ final class RunningWindow {
         minimized = task.optBoolean("minimized");
         visible = task.optBoolean("visible");
         focused = task.optBoolean("focused");
+        retained = task.optBoolean("retained");
     }
 }

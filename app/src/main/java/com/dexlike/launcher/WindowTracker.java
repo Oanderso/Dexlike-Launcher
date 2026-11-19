@@ -165,6 +165,57 @@ final class WindowTracker {
         });
     }
 
+    void activate(String packageName, Runnable noRetainedTask) {
+        if (closed || service == null) {
+            android.widget.Toast.makeText(activity, "Connect Shizuku window tracking to restore existing windows", android.widget.Toast.LENGTH_LONG).show();
+            return;
+        }
+        ITaskService remote = service;
+        Rect area = activity.desktopWorkArea();
+        final Rect work = area == null ? new Rect() : area;
+        int display = activity.getWindowManager().getDefaultDisplay().getDisplayId(), user = android.os.Process.myUid() / 100000;
+        worker.execute(() -> {
+            String error;
+            try { error = remote.activate(packageName, display, user, work.left, work.top, work.right, work.bottom); }
+            catch (Exception failure) { error = failure.getMessage(); }
+            final String result = error;
+            main.post(() -> {
+                if (closed) return;
+                if ("NO_TASK".equals(result)) noRetainedTask.run();
+                else if (result != null && !result.isEmpty()) android.widget.Toast.makeText(activity, result, android.widget.Toast.LENGTH_LONG).show();
+                refresh();
+            });
+        });
+    }
+
+    void forApp(String packageName, java.util.function.Consumer<List<RunningWindow>> callback) {
+        if (closed || service == null) {
+            android.widget.Toast.makeText(activity, "Connect Shizuku window tracking to list app windows", android.widget.Toast.LENGTH_LONG).show();
+            return;
+        }
+        ITaskService remote = service;
+        int display = activity.getWindowManager().getDefaultDisplay().getDisplayId(), user = android.os.Process.myUid() / 100000;
+        worker.execute(() -> {
+            List<RunningWindow> result = new ArrayList<>();
+            String error = null;
+            try {
+                JSONObject snapshot = new JSONObject(remote.snapshot(display, user));
+                if (snapshot.has("error")) throw new IllegalStateException(snapshot.getString("error"));
+                JSONArray tasks = snapshot.getJSONArray("tasks");
+                for (int i = 0; i < tasks.length(); i++) {
+                    RunningWindow window = new RunningWindow(tasks.getJSONObject(i));
+                    if (packageName.equals(window.packageName)) result.add(window);
+                }
+            } catch (Exception failure) { error = failure.getMessage(); }
+            final String failure = error;
+            main.post(() -> {
+                if (closed) return;
+                if (failure != null) android.widget.Toast.makeText(activity, failure, android.widget.Toast.LENGTH_LONG).show();
+                else callback.accept(result);
+            });
+        });
+    }
+
     void minimize(RunningWindow window) {
         if (closed || service == null) return;
         ITaskService remote = service;
