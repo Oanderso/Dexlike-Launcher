@@ -52,6 +52,8 @@ jobs:
           java -cp "$RUNNER_TEMP/resize-tests" com.dexlike.launcher.WidgetResizeBoundsTest
           javac -d "$RUNNER_TEMP/resize-tests" app/src/main/java/com/dexlike/launcher/DesktopGeometry.java tests/DesktopGeometryTest.java
           java -cp "$RUNNER_TEMP/resize-tests" com.dexlike.launcher.DesktopGeometryTest
+          javac -cp "$RUNNER_TEMP/resize-tests" -d "$RUNNER_TEMP/resize-tests" app/src/main/java/com/dexlike/launcher/IconPackMapping.java tests/IconPackMappingTest.java
+          java -cp "$RUNNER_TEMP/resize-tests" com.dexlike.launcher.IconPackMappingTest
 
       - name: Compile preview APK
         if: github.ref != 'refs/heads/main' || github.event_name == 'pull_request'

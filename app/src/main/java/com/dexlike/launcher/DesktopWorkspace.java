@@ -8,6 +8,8 @@ import android.appwidget.AppWidgetManager;
 import android.appwidget.AppWidgetProviderInfo;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.ResolveInfo;
 import android.graphics.ImageDecoder;
@@ -66,6 +68,10 @@ final class DesktopWorkspace extends FrameLayout {
     private float menuX, menuY;
     private Item selectedWidget;
     private PopupWindow desktopMenu;
+    private boolean blankGesture, blankMenuOpened;
+    private final BroadcastReceiver wallpaperChanges = new BroadcastReceiver() {
+        @Override public void onReceive(android.content.Context context, Intent intent) { refreshSystemWallpaper(); }
+    };
 
     private static final class Item {
         String shortcut;
@@ -92,13 +98,43 @@ final class DesktopWorkspace extends FrameLayout {
         loadWallpaper();
     }
 
-    void onStart() { host.startListening(); }
+    void onStart() {
+        host.startListening();
+        activity.registerReceiver(wallpaperChanges, new IntentFilter(Intent.ACTION_WALLPAPER_CHANGED));
+        refreshSystemWallpaper();
+    }
     void onStop() {
         host.stopListening();
+        activity.unregisterReceiver(wallpaperChanges);
         selectWidget(null);
         if (desktopMenu != null) desktopMenu.dismiss();
     }
     void saveState(Bundle state) { state.putInt("pendingWidget", pendingWidget); }
+
+    @Override public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            blankGesture = true;
+            blankMenuOpened = false;
+            for (Item item : items) {
+                if (item.view.getVisibility() != VISIBLE) continue;
+                Rect hit = new Rect();
+                item.view.getHitRect(hit);
+                if (hit.contains((int) event.getX(), (int) event.getY())) { blankGesture = false; break; }
+            }
+        }
+        if (blankGesture && event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            MotionEvent cancel = MotionEvent.obtain(event);
+            cancel.setAction(MotionEvent.ACTION_CANCEL);
+            super.dispatchTouchEvent(cancel);
+            cancel.recycle();
+        }
+        // Route empty-desktop gestures directly to the workspace, never to a retained child target.
+        boolean handled = blankGesture ? onTouchEvent(event) : super.dispatchTouchEvent(event);
+        if (event.getActionMasked() == MotionEvent.ACTION_UP && selectedWidget == null && !blankMenuOpened) {
+            activity.lowerDesktop();
+        }
+        return handled;
+    }
 
     @Override public boolean onTouchEvent(MotionEvent event) {
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
@@ -116,6 +152,7 @@ final class DesktopWorkspace extends FrameLayout {
     }
 
     void showMenu(View anchor) {
+        if (anchor == this) blankMenuOpened = true;
         selectWidget(null);
         if (desktopMenu != null) desktopMenu.dismiss();
         LinearLayout entries = new LinearLayout(activity);
@@ -170,11 +207,22 @@ final class DesktopWorkspace extends FrameLayout {
         entries.addView(entry, new LinearLayout.LayoutParams(-1, dp(48)));
     }
 
+    private int shortcutWidth() { return DesktopGeometry.cellWidth(activity.shortcutIconSize()); }
+    private int shortcutHeight() { return DesktopGeometry.cellHeight(activity.shortcutIconSize()); }
+
     void updateShortcutIconSizes() {
         int size = dp(activity.shortcutIconSize());
         for (Item item : items) {
-            if (item.icon != null) item.icon.setLayoutParams(new LinearLayout.LayoutParams(size, size));
+            if (item.icon != null) {
+                item.width = shortcutWidth(); item.height = shortcutHeight();
+                item.icon.setLayoutParams(new LinearLayout.LayoutParams(size, size));
+                ResolveInfo app = activity.find(item.shortcut);
+                if (app != null) item.icon.setImageDrawable(activity.appIcon(app));
+            }
         }
+        layoutShortcuts();
+        rememberVisibleShortcutSlots();
+        save();
     }
 
     private void changeWallpaper(Uri next) {
@@ -197,6 +245,7 @@ final class DesktopWorkspace extends FrameLayout {
         String source = system ? null : prefs.getString("wallpaper", null);
         if (source == null) {
             wallpaper.setImageDrawable(null);
+            if (system) loadSystemWallpaperFallback(version);
             return;
         }
         int maxEdge = Math.min(4096, Math.max(
@@ -221,6 +270,32 @@ final class DesktopWorkspace extends FrameLayout {
         }, "desktop-wallpaper").start();
     }
 
+    boolean isEditing() { return selectedWidget != null; }
+
+    void refreshSystemWallpaper() {
+        if (prefs.getBoolean("systemWallpaper", !prefs.contains("wallpaper"))) loadWallpaper();
+    }
+
+    private void loadSystemWallpaperFallback(int version) {
+        activity.requestWallpaper(file -> {
+            if (file == null) return; // The native wallpaper surface is still requested without Shizuku.
+            new Thread(() -> {
+                try (android.os.ParcelFileDescriptor descriptor = file) {
+                    android.graphics.BitmapFactory.Options options = new android.graphics.BitmapFactory.Options();
+                    options.inJustDecodeBounds = true;
+                    android.graphics.BitmapFactory.decodeFileDescriptor(descriptor.getFileDescriptor(), null, options);
+                    int edge = Math.max(getResources().getDisplayMetrics().widthPixels, getResources().getDisplayMetrics().heightPixels);
+                    options.inSampleSize = Math.max(1, Math.max(options.outWidth, options.outHeight) / Math.max(1, edge));
+                    options.inJustDecodeBounds = false;
+                    android.graphics.Bitmap bitmap = android.graphics.BitmapFactory.decodeFileDescriptor(descriptor.getFileDescriptor(), null, options);
+                    activity.runOnUiThread(() -> {
+                        if (!activity.isDestroyed() && version == wallpaperVersion && bitmap != null) wallpaper.setImageBitmap(bitmap);
+                    });
+                } catch (Exception ignored) { }
+            }, "system-wallpaper").start();
+        });
+    }
+
     void addShortcut(ResolveInfo app) {
         String key = activity.key(app);
         for (Item item : items) {
@@ -231,8 +306,8 @@ final class DesktopWorkspace extends FrameLayout {
         }
         Item item = new Item();
         item.shortcut = key;
-        item.width = SHORTCUT_WIDTH;
-        item.height = SHORTCUT_HEIGHT;
+        item.width = shortcutWidth();
+        item.height = shortcutHeight();
         Point slot = nearestShortcutSlot(item, GRID_MARGIN, GRID_MARGIN, occupiedShortcutSlots(item));
         if (slot == null) {
             message("The desktop shortcut grid is full");
@@ -434,8 +509,8 @@ final class DesktopWorkspace extends FrameLayout {
         long bestDistance = Long.MAX_VALUE;
         int maxX = Math.max(0, units(getWidth()) - item.width);
         int maxY = Math.max(0, units(getHeight()) - item.height);
-        for (int row = Math.min(GRID_MARGIN, maxY); row <= maxY; row += SHORTCUT_HEIGHT) {
-            for (int column = Math.min(GRID_MARGIN, maxX); column <= maxX; column += SHORTCUT_WIDTH) {
+        for (int row = Math.min(GRID_MARGIN, maxY); row <= maxY; row += shortcutHeight()) {
+            for (int column = Math.min(GRID_MARGIN, maxX); column <= maxX; column += shortcutWidth()) {
                 Point slot = new Point(column, row);
                 if (occupied.contains(slot)) continue;
                 boolean onWidget = false;
@@ -507,13 +582,14 @@ final class DesktopWorkspace extends FrameLayout {
         FrameLayout tile = item.shortcut == null ? new WidgetFrame(item) : new FrameLayout(activity);
         item.view = tile;
         if (item.shortcut != null) {
+            item.width = shortcutWidth(); item.height = shortcutHeight();
             ResolveInfo app = activity.find(item.shortcut);
             if (app == null) return false;
             LinearLayout iconTile = new LinearLayout(activity);
             iconTile.setOrientation(LinearLayout.VERTICAL);
             iconTile.setGravity(Gravity.CENTER);
             item.icon = new ImageView(activity);
-            item.icon.setImageDrawable(app.loadIcon(activity.getPackageManager()));
+            item.icon.setImageDrawable(activity.appIcon(app));
             int iconSize = dp(activity.shortcutIconSize());
             iconTile.addView(item.icon, new LinearLayout.LayoutParams(iconSize, iconSize));
             TextView title = text(app.loadLabel(activity.getPackageManager()), 12);

@@ -38,9 +38,9 @@ import java.util.List;
 
 public class MainActivity extends Activity {
     private static final int MIN_TASKBAR_ICON_SIZE = 16;
-    private static final int MAX_TASKBAR_ICON_SIZE = 48;
+    private static final int MAX_TASKBAR_ICON_SIZE = 100;
     private static final int MIN_SHORTCUT_ICON_SIZE = 24;
-    private static final int MAX_SHORTCUT_ICON_SIZE = 56;
+    private static final int MAX_SHORTCUT_ICON_SIZE = 100;
 
     private final int background = Color.rgb(21, 31, 47);
     private final int surface = Color.rgb(38, 54, 76);
@@ -54,6 +54,10 @@ public class MainActivity extends Activity {
     private LinearLayout dockApps;
     private DesktopWorkspace workspace;
     private WindowTracker windowTracker;
+    private IconStyle icons;
+    private Runnable renderDrawer;
+    private EditText drawerSearch;
+    private int lastFocusedWindow = -1;
     private List<RunningWindow> runningWindows = new ArrayList<>();
     private String windowStatus = "Connect Shizuku to track and restore every app window";
     private boolean windowSnapshotAvailable;
@@ -88,12 +92,21 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(background);
         prefs = getSharedPreferences("desktop", MODE_PRIVATE);
         loadApps();
+        icons = new IconStyle(this, prefs, () -> {
+            dockSignature = "";
+            renderDockApps();
+            if (workspace != null) workspace.updateShortcutIconSizes();
+            if (renderDrawer != null) renderDrawer.run();
+        });
         buildDesktop(savedInstanceState);
         windowTracker = new WindowTracker(this, (windows, status) -> {
+            boolean wasConnected = windowSnapshotAvailable;
             runningWindows = windows;
+            for (RunningWindow window : windows) if (window.focused) lastFocusedWindow = window.id;
             windowStatus = status;
             windowSnapshotAvailable = status.startsWith("Connected") || status.startsWith("Tracking windows");
             if (windowStatusView != null) windowStatusView.setText(status);
+            if (!wasConnected && windowSnapshotAvailable) workspace.refreshSystemWallpaper();
             renderDockApps();
             if (windowChooser != null && windowChooser.isShowing()
                     && !windowSnapshotAvailable) windowChooser.dismiss();
@@ -262,7 +275,10 @@ public class MainActivity extends Activity {
     void useSystemWallpaper(boolean system) {
         getWindow().setBackgroundDrawable(new ColorDrawable(system ? Color.TRANSPARENT : background));
         root.setBackgroundColor(system ? Color.TRANSPARENT : background);
-        if (system) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER);
+        if (system) {
+            getWindow().setFormat(android.graphics.PixelFormat.TRANSLUCENT);
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER);
+        }
         else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER);
     }
 
@@ -279,6 +295,16 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) view.getLayoutParams();
         params.bottomMargin = taskbarHeight();
         view.setLayoutParams(params);
+    }
+
+    android.graphics.drawable.Drawable appIcon(ResolveInfo app) { return icons.icon(app); }
+
+    void lowerDesktop() {
+        if (windowTracker != null && !drawerOpen) windowTracker.lowerDesktop();
+    }
+
+    void requestWallpaper(java.util.function.Consumer<android.os.ParcelFileDescriptor> callback) {
+        if (windowTracker != null) windowTracker.wallpaper(callback);
     }
 
     int shortcutIconSize() {
@@ -310,6 +336,23 @@ public class MainActivity extends Activity {
         SeekBar desktopSize = addSizeSetting(settings, "Desktop shortcut icons", MIN_SHORTCUT_ICON_SIZE,
                 MAX_SHORTCUT_ICON_SIZE, shortcutIconSize());
 
+        Switch iconGrid = new Switch(this);
+        iconGrid.setText("Apps drawer: icons only, three columns");
+        iconGrid.setTextColor(textColor);
+        iconGrid.setChecked(prefs.getBoolean("drawerIconGrid", false));
+        settings.addView(iconGrid);
+        Button iconStyle = new Button(this);
+        iconStyle.setText("Icon style: " + icons.title());
+        iconStyle.setOnClickListener(v -> icons.choose(() -> iconStyle.setText("Icon style: " + icons.title())));
+        settings.addView(iconStyle);
+        Button home = new Button(this);
+        home.setText("Set Dexlike as default home");
+        home.setOnClickListener(v -> {
+            android.app.role.RoleManager roles = getSystemService(android.app.role.RoleManager.class);
+            if (roles != null && roles.isRoleAvailable(android.app.role.RoleManager.ROLE_HOME))
+                startActivityForResult(roles.createRequestRoleIntent(android.app.role.RoleManager.ROLE_HOME), 201);
+        });
+        settings.addView(home);
         CheckBox suppressBars = new CheckBox(this);
         suppressBars.setText("Hide system bars on the desktop");
         suppressBars.setTextColor(textColor);
@@ -330,12 +373,14 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Dexlike Launcher settings").setView(settingsScroll)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Save", (dialog, which) -> {
-                    prefs.edit().putBoolean("suppressSystemBars", suppressBars.isChecked()).putInt("taskbarIconSize", MIN_TASKBAR_ICON_SIZE + taskbarSize.getProgress())
+                    prefs.edit().putBoolean("drawerIconGrid", iconGrid.isChecked())
+                            .putBoolean("suppressSystemBars", suppressBars.isChecked()).putInt("taskbarIconSize", MIN_TASKBAR_ICON_SIZE + taskbarSize.getProgress())
                             .putInt("shortcutIconSize", MIN_SHORTCUT_ICON_SIZE + desktopSize.getProgress()).apply();
                     updateTaskbarHeight();
                     renderDockApps();
                     workspace.updateShortcutIconSizes();
                     suppressSystemBars();
+                    if (drawerOpen) { toggleDrawer(); toggleDrawer(); }
                 }).show();
     }
 
@@ -378,9 +423,9 @@ public class MainActivity extends Activity {
     private void renderDockApps() {
         if (dockApps == null) return;
         String pinned = prefs.getString("pinned", "");
-        StringBuilder signature = new StringBuilder(pinned).append(taskbarIconSize()).append(windowSnapshotAvailable);
+        StringBuilder signature = new StringBuilder(pinned).append(taskbarIconSize()).append(windowSnapshotAvailable).append(icons.version());
         for (RunningWindow window : runningWindows) signature.append('|').append(window.id).append(window.packageName)
-                .append(window.label).append(window.minimized);
+                .append(window.label).append(window.minimized).append(window.visible);
         if (!windowSnapshotAvailable) signature.append(recent.toString());
         if (dockSignature.equals(signature.toString())) return;
         dockSignature = signature.toString();
@@ -407,17 +452,25 @@ public class MainActivity extends Activity {
             entry.setOrientation(LinearLayout.VERTICAL);
             entry.setGravity(Gravity.CENTER);
             ImageView icon = new ImageView(this);
-            try { icon.setImageDrawable(app != null ? app.loadIcon(getPackageManager()) : getPackageManager().getApplicationIcon(packageName)); }
+            try { icon.setImageDrawable(app != null ? appIcon(app) : getPackageManager().getApplicationIcon(packageName)); }
             catch (PackageManager.NameNotFoundException ignored) { icon.setImageResource(android.R.drawable.sym_def_app_icon); }
             entry.addView(icon, new LinearLayout.LayoutParams(iconSize, iconSize));
             List<RunningWindow> windows = windowsFor(packageName);
             TextView name = label(title + (windows.isEmpty() ? "" : " · " + windows.size()), 10);
             name.setSingleLine(true); name.setGravity(Gravity.CENTER);
             name.setPadding(dp(2), 0, dp(2), 0);
-            entry.addView(name, new LinearLayout.LayoutParams(dp(90), dp(20)));
+            entry.addView(name, new LinearLayout.LayoutParams(dp(Math.max(90, taskbarIconSize() + 8)), dp(20)));
             entry.setContentDescription(title + (windows.isEmpty() ? "" : ", " + windows.size() + " open windows"));
             entry.setOnClickListener(v -> {
-                if (!windowsFor(packageName).isEmpty()) showWindows(entry, packageName);
+                List<RunningWindow> current = windowsFor(packageName);
+                RunningWindow selected = null;
+                for (RunningWindow window : current) if (window.id == lastFocusedWindow && window.visible) selected = window;
+                if (selected != null) windowTracker.minimize(selected);
+                else if (current.size() == 1) {
+                    RunningWindow only = current.get(0);
+                    if (only.visible && !only.minimized) windowTracker.minimize(only);
+                    else windowTracker.restore(only);
+                } else if (!current.isEmpty()) showWindows(entry, packageName);
                 else if (app != null) launch(app);
             });
             if (!windows.isEmpty()) {
@@ -438,7 +491,7 @@ public class MainActivity extends Activity {
                 return true;
             });
             if (app != null) entry.setOnContextClickListener(v -> { showAppMenu(v, app); return true; });
-            dockApps.addView(entry, new LinearLayout.LayoutParams(dp(98), -1));
+            dockApps.addView(entry, new LinearLayout.LayoutParams(dp(Math.max(98, taskbarIconSize() + 16)), -1));
         }
     }
 
@@ -618,10 +671,17 @@ public class MainActivity extends Activity {
     }
 
     private void toggleDrawer() {
-        if (drawerOpen) { root.removeView(drawer); drawer = null; drawerOpen = false; return; }
+        if (drawerOpen) {
+            if (drawerSearch != null) getSystemService(android.view.inputmethod.InputMethodManager.class)
+                    .hideSoftInputFromWindow(drawerSearch.getWindowToken(), 0);
+            root.removeView(drawer); drawer = null; drawerSearch = null;
+            renderDrawer = null; drawerOpen = false;
+            return;
+        }
         drawerOpen = true;
         drawer = new LinearLayout(this);
         drawer.setOrientation(LinearLayout.VERTICAL);
+        drawer.setClickable(true);
         drawer.setBackgroundColor(0xFF2B4059);
         drawer.setPadding(dp(12), dp(12), dp(12), dp(12));
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(380), -1, Gravity.LEFT | Gravity.TOP);
@@ -629,6 +689,7 @@ public class MainActivity extends Activity {
         root.addView(drawer, params);
 
         EditText search = new EditText(this);
+        drawerSearch = search;
         search.setSingleLine(true); search.setTextColor(Color.WHITE);
         search.setHintTextColor(0xFFBCCADA); search.setHint("Search applications");
         drawer.addView(search, new LinearLayout.LayoutParams(-1, dp(55)));
@@ -638,30 +699,59 @@ public class MainActivity extends Activity {
         list.setOrientation(LinearLayout.VERTICAL);
         scroll.addView(list);
         drawer.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        Runnable render = () -> {
+        renderDrawer = () -> {
             list.removeAllViews();
-            String filter = search.getText().toString().toLowerCase();
+            String filter = search.getText().toString().toLowerCase(java.util.Locale.ROOT);
+            boolean grid = prefs.getBoolean("drawerIconGrid", false);
+            LinearLayout gridRow = null;
+            int column = 0;
             for (ResolveInfo app : apps) {
                 String title = app.loadLabel(getPackageManager()).toString();
-                if (!title.toLowerCase().contains(filter)) continue;
-                LinearLayout row = new LinearLayout(this);
-                row.setGravity(Gravity.CENTER_VERTICAL);
+                if (!title.toLowerCase(java.util.Locale.ROOT).contains(filter)) continue;
+                LinearLayout entry = new LinearLayout(this);
+                entry.setGravity(Gravity.CENTER);
                 ImageView icon = new ImageView(this);
-                icon.setImageDrawable(app.loadIcon(getPackageManager()));
-                row.addView(icon, new LinearLayout.LayoutParams(dp(30), dp(30)));
-                TextView name = label(title, 15);
-                row.addView(name, new LinearLayout.LayoutParams(0, dp(52), 1));
-                row.setOnClickListener(v -> launch(app));
-                bindAppMenu(row, app);
-                list.addView(row);
+                icon.setImageDrawable(appIcon(app));
+                if (grid) {
+                    if (column == 0) {
+                        gridRow = new LinearLayout(this);
+                        list.addView(gridRow, new LinearLayout.LayoutParams(-1, dp(88)));
+                    }
+                    entry.setContentDescription(title);
+                    entry.setTooltipText(title);
+                    entry.addView(icon, new LinearLayout.LayoutParams(dp(48), dp(48)));
+                    gridRow.addView(entry, new LinearLayout.LayoutParams(0, -1, 1));
+                    column = (column + 1) % 3;
+                } else {
+                    entry.setGravity(Gravity.CENTER_VERTICAL);
+                    entry.addView(icon, new LinearLayout.LayoutParams(dp(30), dp(30)));
+                    TextView name = label(title, 15);
+                    entry.addView(name, new LinearLayout.LayoutParams(0, dp(52), 1));
+                    list.addView(entry);
+                }
+                entry.setFocusable(true);
+                entry.setBackgroundResource(android.R.drawable.list_selector_background);
+                entry.setOnClickListener(v -> launch(app));
+                bindAppMenu(entry, app);
+            }
+            if (grid && column != 0) for (int i = column; i < 3; i++) {
+                gridRow.addView(new View(this), new LinearLayout.LayoutParams(0, -1, 1));
             }
         };
         search.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            public void onTextChanged(CharSequence s, int start, int before, int count) { render.run(); }
+            public void onTextChanged(CharSequence s, int start, int before, int count) { renderDrawer.run(); }
             public void afterTextChanged(android.text.Editable s) {}
         });
-        render.run();
+        renderDrawer.run();
+        search.requestFocus();
+        search.post(() -> {
+            if (drawerOpen && drawerSearch == search) {
+                search.requestFocus();
+                getSystemService(android.view.inputmethod.InputMethodManager.class)
+                        .showSoftInput(search, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+            }
+        });
     }
 
     @Override protected void onSaveInstanceState(Bundle state) {
@@ -721,7 +811,10 @@ public class MainActivity extends Activity {
 
     @Override public void onWindowFocusChanged(boolean focused) {
         super.onWindowFocusChanged(focused);
-        if (focused) suppressSystemBars();
+        if (focused) {
+            suppressSystemBars();
+            if (root != null && workspace != null && !workspace.isEditing()) root.post(this::lowerDesktop);
+        }
         else if (root != null) root.removeCallbacks(rehideBars);
     }
 
@@ -732,6 +825,7 @@ public class MainActivity extends Activity {
     }
     @Override protected void onDestroy() {
         if (windowTracker != null) windowTracker.close();
+        if (icons != null) icons.close();
         super.onDestroy();
     }
 

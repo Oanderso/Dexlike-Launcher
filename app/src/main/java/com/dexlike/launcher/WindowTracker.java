@@ -165,6 +165,65 @@ final class WindowTracker {
         });
     }
 
+    void minimize(RunningWindow window) {
+        if (closed || service == null) return;
+        ITaskService remote = service;
+        int display = activity.getWindowManager().getDefaultDisplay().getDisplayId();
+        int user = android.os.Process.myUid() / 100000;
+        worker.execute(() -> {
+            String error;
+            try { error = remote.minimize(window.id, display, user); }
+            catch (Exception failure) { error = failure.getMessage(); }
+            final String result = error;
+            main.post(() -> {
+                if (closed) return;
+                if (result != null && !result.isEmpty()) android.widget.Toast.makeText(activity, result, android.widget.Toast.LENGTH_LONG).show();
+                refresh();
+            });
+        });
+    }
+
+    private boolean lowering;
+    private String lastOrderingError = "";
+    void lowerDesktop() {
+        if (closed || service == null || lowering) return;
+        lowering = true;
+        ITaskService remote = service;
+        int task = activity.getTaskId(), display = activity.getWindowManager().getDefaultDisplay().getDisplayId();
+        int user = android.os.Process.myUid() / 100000;
+        worker.execute(() -> {
+            String error;
+            try { error = remote.lowerDesktop(task, display, user); }
+            catch (Exception failure) { error = failure.getMessage(); }
+            final String result = error;
+            main.post(() -> {
+                lowering = false;
+                if (closed) return;
+                if (result != null && !result.isEmpty() && !result.equals(lastOrderingError)) {
+                    lastOrderingError = result;
+                    android.widget.Toast.makeText(activity, "Desktop ordering unavailable: " + result, android.widget.Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+    }
+
+    void wallpaper(java.util.function.Consumer<android.os.ParcelFileDescriptor> callback) {
+        if (closed || service == null) { callback.accept(null); return; }
+        ITaskService remote = service;
+        int user = android.os.Process.myUid() / 100000;
+        worker.execute(() -> {
+            android.os.ParcelFileDescriptor file = null;
+            try { file = remote.wallpaper(user); }
+            catch (Exception ignored) { }
+            final android.os.ParcelFileDescriptor ready = file;
+            main.post(() -> {
+                if (closed) {
+                    if (ready != null) try { ready.close(); } catch (Exception ignored) { }
+                } else callback.accept(ready);
+            });
+        });
+    }
+
     void close() {
         closed = true; active = false;
         main.removeCallbacksAndMessages(null);
