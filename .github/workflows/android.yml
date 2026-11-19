@@ -50,6 +50,19 @@ jobs:
         if: github.ref != 'refs/heads/main' || github.event_name == 'pull_request'
         run: gradle --no-daemon --stacktrace -PdexlikeVersionCode="$((GITHUB_RUN_NUMBER + 1))" :app:assembleDebug
 
+      - name: Check release signing with a temporary key
+        if: github.ref != 'refs/heads/main' || github.event_name == 'pull_request'
+        run: |
+          signing_dir="$(mktemp -d)"
+          trap 'rm -rf "$signing_dir"' EXIT
+          export DEXLIKE_KEYSTORE="$signing_dir/test.p12"
+          export DEXLIKE_KEYSTORE_PASSWORD="preview-only-password"
+          keytool -genkeypair -keystore "$DEXLIKE_KEYSTORE" -storetype PKCS12 \
+            -storepass "$DEXLIKE_KEYSTORE_PASSWORD" -alias dexlike -keyalg RSA \
+            -keysize 2048 -validity 30 -dname "CN=Dexlike CI test"
+          gradle --no-daemon -PdexlikeVersionCode="$((GITHUB_RUN_NUMBER + 1))" :app:assembleRelease
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify app/build/outputs/apk/release/app-release.apk
+
       - name: Upload preview APK
         if: github.ref != 'refs/heads/main' || github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
