@@ -1,5 +1,7 @@
 plugins { id 'com.android.application' }
 
+def signingPath = providers.environmentVariable('DEXLIKE_KEYSTORE').orNull
+
 android {
     namespace 'com.dexlike.launcher'
     compileSdk 35
@@ -7,8 +9,23 @@ android {
         applicationId 'com.dexlike.launcher'
         minSdk 29
         targetSdk 32
-        versionCode 1
-        versionName '0.1.0'
+        versionCode providers.gradleProperty('dexlikeVersionCode').getOrElse('2').toInteger()
+        versionName '0.2.0'
+    }
+    signingConfigs {
+        if (signingPath) {
+            release {
+                storeFile file(signingPath)
+                storePassword providers.environmentVariable('DEXLIKE_KEYSTORE_PASSWORD').get()
+                keyAlias 'dexlike'
+                keyPassword storePassword
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (signingPath) signingConfig signingConfigs.release
+        }
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }
