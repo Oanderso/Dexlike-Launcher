@@ -334,7 +334,17 @@ public final class TaskService extends ITaskService.Stub {
             // Selecting Samsung icons must not force the native bar to stay visible.
             if ("immersive.status=*".equals(policy)) {
                 Process write = new ProcessBuilder("settings", "put", "global", "policy_control", "immersive.full=*").start();
-                return write.waitFor() == 0 ? "" : "Could not restore transient system bars";
+                if (write.waitFor() != 0) return "Could not restore transient system bars";
+            }
+            if ("samsung".equalsIgnoreCase(android.os.Build.MANUFACTURER) && android.os.Build.VERSION.SDK_INT >= 35) {
+                // Samsung's native Shell settings use a visible-types mask: 0 hides both;
+                // 2 permits navigation/taskbar while keeping the top status bar hidden.
+                Process bars = new ProcessBuilder("settings", "put", "global",
+                        "desktop_windowing_force_hide_system_bars_on_default_display", samsung ? "2" : "0").start();
+                if (bars.waitFor() != 0) return "Could not configure Samsung system bars";
+                Process taskbar = new ProcessBuilder("settings", "put", "global",
+                        "desktop_windowing_force_hide_taskbar", samsung ? "0" : "1").start();
+                if (taskbar.waitFor() != 0) return "Could not configure Samsung taskbar visibility";
             }
             return "";
         } catch (Exception error) { return message(error); }

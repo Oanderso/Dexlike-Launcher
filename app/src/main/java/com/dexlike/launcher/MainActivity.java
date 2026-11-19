@@ -337,7 +337,7 @@ public class MainActivity extends Activity {
     private boolean samsungTaskbar() { return prefs.getBoolean("samsungTaskbar", false); }
 
     void applyTaskbarPolicy() {
-        if (prefs.contains("samsungTaskbar") && windowTracker != null) windowTracker.taskbarPolicy(samsungTaskbar());
+        if (windowTracker != null) windowTracker.taskbarPolicy(samsungTaskbar());
     }
 
     private int taskbarHeight() {
@@ -468,6 +468,11 @@ public class MainActivity extends Activity {
 
         SeekBar taskbarText = addPercentSetting(settings, "Taskbar text", prefs.getInt("taskbarTextPercent", 100));
         SeekBar taskbarButtons = addPercentSetting(settings, "Apps / Back / Home / Recents buttons", prefs.getInt("taskbarButtonPercent", 100));
+        Switch appLabels = new Switch(this);
+        appLabels.setText("Show app names and window counts in taskbar");
+        appLabels.setTextColor(textColor);
+        appLabels.setChecked(prefs.getBoolean("taskbarAppLabels", false));
+        settings.addView(appLabels);
         settings.addView(label("Taskbar app icons", 17));
         RadioGroup taskbarSource = new RadioGroup(this);
         RadioButton dexlike = new RadioButton(this);
@@ -531,7 +536,7 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Dexlike Launcher settings").setView(settingsScroll)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Save", (dialog, which) -> {
-                    prefs.edit().putInt("taskbarTextPercent", 50 + taskbarText.getProgress())
+                    prefs.edit().putBoolean("taskbarAppLabels", appLabels.isChecked()).putInt("taskbarTextPercent", 50 + taskbarText.getProgress())
                             .putInt("taskbarButtonPercent", 50 + taskbarButtons.getProgress()).putString("samsungControlEdge", edges[controlEdge.getSelectedItemPosition()]).putBoolean("samsungTaskbar", samsung.isChecked()).putBoolean("drawerIconGrid", iconGrid.isChecked())
                             .putBoolean("suppressSystemBars", suppressBars.isChecked()).putInt("taskbarIconSize", MIN_TASKBAR_ICON_SIZE + taskbarSize.getProgress())
                             .putInt("shortcutIconSize", MIN_SHORTCUT_ICON_SIZE + desktopSize.getProgress()).apply();
@@ -600,7 +605,8 @@ public class MainActivity extends Activity {
         if (dockApps != null) dockApps.setVisibility(samsungTaskbar() ? View.GONE : View.VISIBLE);
         if (dockApps == null) return;
         String pinned = prefs.getString("pinned", "");
-        StringBuilder signature = new StringBuilder(pinned).append(taskbarIconSize()).append(prefs.getInt("taskbarTextPercent", 100)).append(windowSnapshotAvailable).append(icons.version());
+        boolean showLabels = prefs.getBoolean("taskbarAppLabels", false);
+        StringBuilder signature = new StringBuilder(pinned).append(taskbarIconSize()).append(prefs.getInt("taskbarTextPercent", 100)).append(showLabels).append(windowSnapshotAvailable).append(icons.version());
         List<String> taskKeys = new ArrayList<>();
         for (RunningWindow window : runningWindows) taskKeys.add(window.packageName + "/" + window.id);
         java.util.Collections.sort(taskKeys);
@@ -620,7 +626,8 @@ public class MainActivity extends Activity {
             reconnect.setOnClickListener(v -> windowTracker.requestAccess());
             dockApps.addView(reconnect, new LinearLayout.LayoutParams(-2, -1));
         }
-        int iconSize = dp(taskbarIconSize());
+        int usableHeight = Math.max(dp(16), taskbarHeight() - dock.getPaddingTop() - dock.getPaddingBottom());
+        int iconSize = showLabels ? dp(taskbarIconSize()) : Math.max(dp(16), usableHeight - dp(2));
         LinkedHashMap<String, ResolveInfo> groups = new LinkedHashMap<>();
         if (!pinned.isEmpty()) for (String key : pinned.split("\\|")) {
             ResolveInfo app = find(key);
@@ -646,7 +653,8 @@ public class MainActivity extends Activity {
             TextView name = label(title + (windows.isEmpty() ? "" : " · " + windows.size()), Math.round(10 * textScale()));
             name.setSingleLine(true); name.setGravity(Gravity.CENTER);
             name.setPadding(dp(2), 0, dp(2), 0);
-            entry.addView(name, new LinearLayout.LayoutParams(dp(Math.max(90, taskbarIconSize() + 8)), dp(20)));
+            if (showLabels) entry.addView(name, new LinearLayout.LayoutParams(dp(Math.max(90, taskbarIconSize() + 8)), dp(20)));
+            entry.setTooltipText(title + (windows.isEmpty() ? "" : " · " + windows.size() + " windows"));
             entry.setContentDescription(title + (windows.isEmpty() ? "" : ", " + windows.size() + " open windows"));
             entry.setOnClickListener(v -> {
                 if (!windowTracker.ready()) { windowTracker.requestAccess(); return; }
@@ -667,7 +675,7 @@ public class MainActivity extends Activity {
                 entry.addView(indicator, new LinearLayout.LayoutParams(dp(16), dp(2)));
             }
             if (app != null) entry.setOnContextClickListener(v -> { showAppMenu(v, app); return true; });
-            dockApps.addView(entry, new LinearLayout.LayoutParams(dp(Math.max(98, taskbarIconSize() + 16)), -1));
+            dockApps.addView(entry, new LinearLayout.LayoutParams(showLabels ? dp(Math.max(98, taskbarIconSize() + 16)) : iconSize + dp(16), -1));
         }
     }
 
