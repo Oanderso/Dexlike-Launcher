@@ -353,9 +353,7 @@ public final class TaskService extends ITaskService.Stub {
         Object multi = invoke(manager(), "getMultiTaskingBinder", new Class<?>[]{});
         Class.forName("com.samsung.android.multiwindow.IMultiTaskingBinder")
                 .getMethod("updateSystemBarVis", int.class, int.class).invoke(multi, 0, 3);
-        wmClass.getMethod("updateDisplayWindowRequestedVisibleTypes", int.class, int.class, int.class,
-                Class.forName("android.view.inputmethod.ImeTracker$Token"))
-                .invoke(wm, display, 0, 3, null);
+        wmClass.getMethod("hideTransientBars", int.class).invoke(wm, display);
     }
 
     @Override public String taskbarPolicy(boolean samsung) {
