@@ -143,6 +143,7 @@ public class MainActivity extends Activity {
         dockApps = new LinearLayout(this);
         dockScroll.addView(dockApps, new FrameLayout.LayoutParams(-2, -1));
 
+        taskbarButton("⚙", "Dexlike Launcher settings", this::showDesktopSettings);
         taskbarButton("◖))", "Volume and audio controls", this::showVolume);
         taskbarButton("▣", "Take screenshot", () -> runSystemAction(GLOBAL_ACTION_TAKE_SCREENSHOT));
         quickSettings = taskbarButton("▾", "Quick Settings", () -> runSystemAction(GLOBAL_ACTION_QUICK_SETTINGS));
@@ -241,6 +242,21 @@ public class MainActivity extends Activity {
         return prefs.getInt("shortcutIconSize", 42);
     }
 
+    void chooseDesktopApp() {
+        loadApps();
+        List<ResolveInfo> choices = new ArrayList<>();
+        for (ResolveInfo app : apps) {
+            if (!getPackageName().equals(app.activityInfo.packageName)) choices.add(app);
+        }
+        String[] labels = new String[choices.size()];
+        for (int i = 0; i < choices.size(); i++) {
+            labels[i] = choices.get(i).loadLabel(getPackageManager()).toString();
+        }
+        new AlertDialog.Builder(this).setTitle("Add app to desktop")
+                .setItems(labels, (dialog, index) -> workspace.addShortcut(choices.get(index)))
+                .setNegativeButton("Cancel", null).show();
+    }
+
     void showDesktopSettings() {
         LinearLayout settings = new LinearLayout(this);
         settings.setOrientation(LinearLayout.VERTICAL);
@@ -251,7 +267,7 @@ public class MainActivity extends Activity {
         SeekBar desktopSize = addSizeSetting(settings, "Desktop shortcut icons", MIN_SHORTCUT_ICON_SIZE,
                 MAX_SHORTCUT_ICON_SIZE, shortcutIconSize());
 
-        new AlertDialog.Builder(this).setTitle("Desktop settings").setView(settings)
+        new AlertDialog.Builder(this).setTitle("Dexlike Launcher settings").setView(settings)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Save", (dialog, which) -> {
                     prefs.edit().putInt("taskbarIconSize", MIN_TASKBAR_ICON_SIZE + taskbarSize.getProgress())
