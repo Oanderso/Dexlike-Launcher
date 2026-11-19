@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="desktop_actions_label">Dexlike taskbar controls</string>
+    <string name="desktop_actions_description">Lets taskbar buttons open Android notifications, Quick Settings, and Recents, or invoke system navigation and screenshots. It does not read screen content or notifications.</string>
+</resources>
