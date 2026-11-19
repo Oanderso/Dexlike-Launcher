@@ -252,5 +252,28 @@ public final class TaskService extends ITaskService.Stub {
         catch (Exception ignored) { return "{\"error\":\"Window access unavailable\"}"; }
     }
 
+    @Override public String taskbarPolicy(boolean samsung) {
+        try {
+            // Change only the two policies used by Dexlike's documented ADB setup.
+            // Do not overwrite unrelated policies configured by another application.
+            Process read = new ProcessBuilder("settings", "get", "global", "policy_control").start();
+            String policy;
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(read.getInputStream()))) {
+                policy = reader.readLine();
+                policy = policy == null ? "" : policy.trim();
+            }
+            read.waitFor();
+            if (samsung && "immersive.full=*".equals(policy)) {
+                Process write = new ProcessBuilder("settings", "put", "global", "policy_control", "immersive.status=*").start();
+                return write.waitFor() == 0 ? "" : "Could not allow Samsung taskbar";
+            }
+            if (!samsung && "immersive.status=*".equals(policy)) {
+                Process write = new ProcessBuilder("settings", "put", "global", "policy_control", "immersive.full=*").start();
+                return write.waitFor() == 0 ? "" : "Could not hide Samsung taskbar";
+            }
+            return "";
+        } catch (Exception error) { return message(error); }
+    }
+
     @Override public void destroy() { System.exit(0); }
 }

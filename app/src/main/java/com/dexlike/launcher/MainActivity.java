@@ -48,6 +48,8 @@ public class MainActivity extends Activity {
     private LinearLayout dock;
     private FrameLayout root;
     private LinearLayout drawer;
+    private PopupWindow drawerPopup;
+    private int samsungBarInset;
     private SharedPreferences prefs;
     private List<ResolveInfo> apps;
     private final ArrayList<String> recent = new ArrayList<>();
@@ -118,8 +120,13 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 30) {
             root.setOnApplyWindowInsetsListener((view, insets) -> {
                 if (insets.isVisible(WindowInsets.Type.navigationBars()) || insets.isVisible(WindowInsets.Type.statusBars())) scheduleBarSuppression();
-                if (drawer != null) drawer.setPadding(dp(12), dp(12), dp(12),
-                        dp(12) + insets.getInsets(WindowInsets.Type.ime()).bottom);
+                if (samsungTaskbar()) {
+                    int bottom = insets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars()).bottom;
+                    if (bottom > 0 && bottom != samsungBarInset) {
+                        samsungBarInset = bottom;
+                        updateTaskbarHeight();
+                    }
+                }
                 return insets;
             });
         } else {
@@ -166,7 +173,7 @@ public class MainActivity extends Activity {
 
         workspace = new DesktopWorkspace(this, prefs, state);
         FrameLayout.LayoutParams workspaceParams = new FrameLayout.LayoutParams(-1, -1);
-        workspaceParams.bottomMargin = taskbarHeight();
+        workspaceParams.bottomMargin = taskbarHeight() + nativeTaskbarHeight();
         root.addView(workspace, workspaceParams);
 
         dock = new LinearLayout(this);
@@ -174,6 +181,7 @@ public class MainActivity extends Activity {
         dock.setPadding(dp(8), dp(5), dp(8), dp(5));
         dock.setBackgroundColor(surface);
         FrameLayout.LayoutParams dockParams = new FrameLayout.LayoutParams(-1, taskbarHeight(), Gravity.BOTTOM);
+        dockParams.bottomMargin = nativeTaskbarHeight();
         root.addView(dock, dockParams);
         refreshDock();
     }
@@ -183,19 +191,19 @@ public class MainActivity extends Activity {
             renderDockApps();
             return;
         }
-        TextView appsButton = taskbarButton("Apps", "Open apps", this::toggleDrawer);
+        TextView appsButton = navigationButton(0, "Open apps", this::toggleDrawer);
         appsButton.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         appsButton.setOnLongClickListener(v -> { workspace.showMenu(v); return true; });
         appsButton.setOnContextClickListener(v -> { workspace.showMenu(v); return true; });
-        taskbarButton("◁", "Back", () -> {
+        navigationButton(1, "Back", () -> {
             if (drawerOpen) toggleDrawer();
             else runSystemAction(GLOBAL_ACTION_BACK);
         });
-        taskbarButton("⌂", "Home", () -> {
+        navigationButton(2, "Home", () -> {
             if (drawerOpen) toggleDrawer();
             DesktopActionsService.run(GLOBAL_ACTION_HOME);
         });
-        taskbarButton("▤", "Recent apps", () -> runSystemAction(GLOBAL_ACTION_RECENTS));
+        navigationButton(3, "Recent apps", () -> runSystemAction(GLOBAL_ACTION_RECENTS));
 
         HorizontalScrollView dockScroll = new HorizontalScrollView(this);
         dockScroll.setHorizontalScrollBarEnabled(false);
@@ -251,6 +259,42 @@ public class MainActivity extends Activity {
         return button;
     }
 
+    private TextView navigationButton(int shape, String description, Runnable action) {
+        TextView button = taskbarButton("", description, action);
+        button.setBackground(new NavigationGlyph(shape));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(52), -1);
+        params.setMargins(dp(3), 0, dp(3), 0);
+        button.setLayoutParams(params);
+        return button;
+    }
+
+    private final class NavigationGlyph extends android.graphics.drawable.Drawable {
+        private final int shape;
+        private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        NavigationGlyph(int shape) { this.shape = shape; paint.setColor(Color.WHITE); paint.setStrokeWidth(dp(2)); }
+        @Override public void draw(android.graphics.Canvas canvas) {
+            Rect bounds = getBounds();
+            float x = bounds.exactCenterX(), y = bounds.exactCenterY(), r = dp(12);
+            paint.setStyle(android.graphics.Paint.Style.STROKE);
+            if (shape == 0) {
+                paint.setStyle(android.graphics.Paint.Style.FILL);
+                float size = dp(9), gap = dp(4), startX = x - size - gap / 2, startY = y - size - gap / 2;
+                for (int row = 0; row < 2; row++) for (int col = 0; col < 2; col++) {
+                    float left = startX + col * (size + gap), top = startY + row * (size + gap);
+                    canvas.drawRoundRect(left, top, left + size, top + size, dp(2), dp(2), paint);
+                }
+            } else if (shape == 1) {
+                android.graphics.Path triangle = new android.graphics.Path();
+                triangle.moveTo(x - r, y); triangle.lineTo(x + r * .75f, y - r);
+                triangle.lineTo(x + r * .75f, y + r); triangle.close(); canvas.drawPath(triangle, paint);
+            } else if (shape == 2) canvas.drawCircle(x, y, r, paint);
+            else canvas.drawRect(x - r, y - r, x + r, y + r, paint);
+        }
+        @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); invalidateSelf(); }
+        @Override public void setColorFilter(android.graphics.ColorFilter filter) { paint.setColorFilter(filter); invalidateSelf(); }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    }
+
     private void showVolume() {
         AudioManager audio = getSystemService(AudioManager.class);
         audio.adjustSuggestedStreamVolume(AudioManager.ADJUST_SAME,
@@ -280,6 +324,14 @@ public class MainActivity extends Activity {
         return prefs.getInt("taskbarIconSize", 27);
     }
 
+    private boolean samsungTaskbar() { return prefs.getBoolean("samsungTaskbar", false); }
+
+    private int nativeTaskbarHeight() { return samsungTaskbar() ? Math.max(samsungBarInset, dp(64)) : 0; }
+
+    void applyTaskbarPolicy() {
+        if (prefs.contains("samsungTaskbar") && windowTracker != null) windowTracker.taskbarPolicy(samsungTaskbar());
+    }
+
     private int taskbarHeight() {
         return dp(Math.max(64, taskbarIconSize() + 34));
     }
@@ -297,15 +349,16 @@ public class MainActivity extends Activity {
     private void updateTaskbarHeight() {
         FrameLayout.LayoutParams dockParams = (FrameLayout.LayoutParams) dock.getLayoutParams();
         dockParams.height = taskbarHeight();
+        dockParams.bottomMargin = nativeTaskbarHeight();
         dock.setLayoutParams(dockParams);
         updateBottomMargin(workspace);
-        if (drawer != null) updateBottomMargin(drawer);
+
         root.post(() -> { if (windowTracker != null) windowTracker.refresh(); });
     }
 
     private void updateBottomMargin(View view) {
         FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) view.getLayoutParams();
-        params.bottomMargin = taskbarHeight();
+        params.bottomMargin = taskbarHeight() + nativeTaskbarHeight();
         view.setLayoutParams(params);
     }
 
@@ -348,6 +401,13 @@ public class MainActivity extends Activity {
         SeekBar desktopSize = addSizeSetting(settings, "Desktop shortcut icons", MIN_SHORTCUT_ICON_SIZE,
                 MAX_SHORTCUT_ICON_SIZE, shortcutIconSize());
 
+        Switch samsung = new Switch(this);
+        samsung.setText("Use Samsung taskbar app icons");
+        samsung.setTextColor(textColor);
+        samsung.setChecked(samsungTaskbar());
+        settings.addView(samsung);
+        settings.addView(label("Hides Dexlike app icons and keeps its controls above Samsung’s taskbar. Samsung controls its own buttons; apps-only is not available through Android. Connect Shizuku to undo Dexlike’s ADB navigation hiding.", 12));
+
         Switch iconGrid = new Switch(this);
         iconGrid.setText("Apps drawer: icons only, three columns");
         iconGrid.setTextColor(textColor);
@@ -385,12 +445,13 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Dexlike Launcher settings").setView(settingsScroll)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Save", (dialog, which) -> {
-                    prefs.edit().putBoolean("drawerIconGrid", iconGrid.isChecked())
+                    prefs.edit().putBoolean("samsungTaskbar", samsung.isChecked()).putBoolean("drawerIconGrid", iconGrid.isChecked())
                             .putBoolean("suppressSystemBars", suppressBars.isChecked()).putInt("taskbarIconSize", MIN_TASKBAR_ICON_SIZE + taskbarSize.getProgress())
                             .putInt("shortcutIconSize", MIN_SHORTCUT_ICON_SIZE + desktopSize.getProgress()).apply();
                     updateTaskbarHeight();
                     renderDockApps();
                     workspace.updateShortcutIconSizes();
+                    applyTaskbarPolicy();
                     suppressSystemBars();
                     if (drawerOpen) { toggleDrawer(); toggleDrawer(); }
                 }).show();
@@ -433,6 +494,7 @@ public class MainActivity extends Activity {
     }
 
     private void renderDockApps() {
+        if (dockApps != null) dockApps.setVisibility(samsungTaskbar() ? View.GONE : View.VISIBLE);
         if (dockApps == null) return;
         String pinned = prefs.getString("pinned", "");
         StringBuilder signature = new StringBuilder(pinned).append(taskbarIconSize()).append(windowSnapshotAvailable).append(icons.version());
@@ -672,7 +734,7 @@ public class MainActivity extends Activity {
         int[] origin = new int[2];
         root.getLocationOnScreen(origin);
         return new Rect(origin[0], origin[1], origin[0] + root.getWidth(),
-                origin[1] + root.getHeight() - taskbarHeight());
+                origin[1] + root.getHeight() - taskbarHeight() - nativeTaskbarHeight());
     }
 
     private Rect launchBounds(Placement placement) {
@@ -704,24 +766,27 @@ public class MainActivity extends Activity {
         if (drawerOpen) {
             if (drawerSearch != null) getSystemService(android.view.inputmethod.InputMethodManager.class)
                     .hideSoftInputFromWindow(drawerSearch.getWindowToken(), 0);
-            root.removeView(drawer); drawer = null; drawerSearch = null;
-            renderDrawer = null; drawerOpen = false;
-            workspace.setVisibility(View.VISIBLE);
-            setDesktopInputFocus(false);
-            lowerDesktop();
+            if (drawerPopup != null) drawerPopup.dismiss();
             return;
         }
         drawerOpen = true;
-        setDesktopInputFocus(true);
-        workspace.setVisibility(View.INVISIBLE);
+
         drawer = new LinearLayout(this);
         drawer.setOrientation(LinearLayout.VERTICAL);
         drawer.setClickable(true);
         drawer.setBackgroundColor(0xFF2B4059);
         drawer.setPadding(dp(12), dp(12), dp(12), dp(12));
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(380), -1, Gravity.LEFT | Gravity.TOP);
-        params.bottomMargin = taskbarHeight();
-        root.addView(drawer, params);
+        drawerPopup = new PopupWindow(drawer, Math.min(dp(380), root.getWidth()),
+                Math.min(dp(620), Math.max(dp(100), root.getHeight() - taskbarHeight() - nativeTaskbarHeight())), true);
+        drawerPopup.setBackgroundDrawable(new ColorDrawable(0xFF2B4059));
+        drawerPopup.setOutsideTouchable(true);
+        drawerPopup.setInputMethodMode(PopupWindow.INPUT_METHOD_NEEDED);
+        drawerPopup.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        drawerPopup.setElevation(dp(12));
+        drawerPopup.setOnDismissListener(() -> {
+            drawerOpen = false; drawer = null; drawerSearch = null; renderDrawer = null; drawerPopup = null;
+            lowerDesktop();
+        });
 
         EditText search = new EditText(this);
         drawerSearch = search;
@@ -779,6 +844,7 @@ public class MainActivity extends Activity {
             public void afterTextChanged(android.text.Editable s) {}
         });
         renderDrawer.run();
+        drawerPopup.showAtLocation(root, Gravity.BOTTOM | Gravity.LEFT, 0, taskbarHeight() + nativeTaskbarHeight());
         search.requestFocus();
         search.post(() -> {
             if (drawerOpen && drawerSearch == search) {
@@ -803,6 +869,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onStop() {
+        if (drawerOpen) toggleDrawer();
         unregisterReceiver(battery);
         workspace.onStop();
         if (windowTracker != null) windowTracker.stop();
@@ -833,8 +900,9 @@ public class MainActivity extends Activity {
             WindowInsetsController controller = getWindow().getInsetsController();
             if (controller != null) {
                 controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-                if (hide) controller.hide(WindowInsets.Type.systemBars());
+                if (hide) controller.hide(samsungTaskbar() ? WindowInsets.Type.statusBars() : WindowInsets.Type.systemBars());
                 else controller.show(WindowInsets.Type.systemBars());
+                if (samsungTaskbar()) controller.show(WindowInsets.Type.navigationBars());
             }
         } else {
             getWindow().getDecorView().setSystemUiVisibility(hide

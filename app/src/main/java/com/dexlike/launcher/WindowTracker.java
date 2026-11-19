@@ -27,6 +27,23 @@ final class WindowTracker {
     private boolean active, binding, busy, closed;
     private int generation;
     private final Runnable poll = this::refresh;
+    private final Runnable reconnect = this::connect;
+    private IBinder watchedBinder;
+    private IBinder.DeathRecipient deathRecipient;
+    private int bindAttempt;
+
+    private void forgetBinder() {
+        if (watchedBinder != null && deathRecipient != null) {
+            watchedBinder.unlinkToDeath(deathRecipient, 0);
+        }
+        watchedBinder = null; deathRecipient = null;
+    }
+
+    private void checkFailure(ITaskService remote) {
+        main.post(() -> {
+            if (!closed && service == remote && !remote.asBinder().isBinderAlive()) disconnected();
+        });
+    }
     private final Shizuku.OnBinderReceivedListener received = () -> main.post(this::connect);
     private final Shizuku.OnBinderDeadListener died = () -> main.post(this::disconnected);
     private final Shizuku.OnRequestPermissionResultListener permission = this::permissionResult;
@@ -42,7 +59,16 @@ final class WindowTracker {
             main.post(() -> {
                 if (closed) return;
                 binding = false;
+                forgetBinder();
                 service = ITaskService.Stub.asInterface(binder);
+                watchedBinder = binder;
+                deathRecipient = () -> main.post(() -> {
+                    if (watchedBinder == binder) disconnected();
+                });
+                try { binder.linkToDeath(deathRecipient, 0); }
+                catch (android.os.RemoteException dead) { disconnected(); return; }
+                main.removeCallbacks(reconnect);
+                activity.applyTaskbarPolicy();
                 refresh();
             });
         }
@@ -52,7 +78,7 @@ final class WindowTracker {
     WindowTracker(MainActivity activity, Listener listener) {
         this.activity = activity; this.listener = listener;
         args = new Shizuku.UserServiceArgs(new ComponentName(activity, TaskService.class))
-                .daemon(false).processNameSuffix("windows").version(serviceVersion());
+                .daemon(true).processNameSuffix("windows").version(serviceVersion());
         Shizuku.addBinderReceivedListenerSticky(received);
         Shizuku.addBinderDeadListener(died);
         Shizuku.addRequestPermissionResultListener(permission);
@@ -65,13 +91,16 @@ final class WindowTracker {
 
     void start() { active = true; connect(); refresh(); }
     void stop() { active = false; main.removeCallbacks(poll); }
-    boolean ready() { return service != null; }
+    boolean ready() { return service != null && service.asBinder().isBinderAlive(); }
 
     void requestAccess() {
         try {
             if (!Shizuku.pingBinder()) {
                 listener.changed(new ArrayList<>(), "Start Shizuku first, then connect again");
-            } else if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) connect();
+            } else if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+                if (!ready() && service != null) disconnected();
+                connect(); refresh();
+            }
             else if (Shizuku.shouldShowRequestPermissionRationale()) {
                 listener.changed(new ArrayList<>(), "Allow Dexlike in Shizuku’s authorized applications");
             } else Shizuku.requestPermission(71);
@@ -79,19 +108,29 @@ final class WindowTracker {
     }
 
     private void connect() {
-        if (closed || !active || binding || service != null) return;
+        if (closed || !active || binding) return;
+        if (ready()) return;
+        if (service != null) { forgetBinder(); service = null; generation++; }
+        main.removeCallbacks(reconnect);
         try {
             if (Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
                 binding = true;
+                final int attempt = ++bindAttempt;
                 Shizuku.bindUserService(args, connection);
                 main.postDelayed(() -> {
-                    if (!closed && binding && service == null) {
+                    if (!closed && attempt == bindAttempt && binding && service == null) {
                         binding = false;
-                        listener.changed(new ArrayList<>(), "Shizuku connection timed out; connect again");
+                        try { Shizuku.unbindUserService(args, connection, false); }
+                        catch (RuntimeException ignored) { }
+                        listener.changed(new ArrayList<>(), "Shizuku connection timed out; retrying");
+                        main.postDelayed(reconnect, 3000);
                     }
                 }, 10000);
+            } else {
+                main.postDelayed(reconnect, 5000);
             }
         } catch (RuntimeException error) {
+            main.postDelayed(reconnect, 5000);
             binding = false;
             listener.changed(new ArrayList<>(), "Could not connect to Shizuku");
         }
@@ -99,9 +138,14 @@ final class WindowTracker {
 
     private void disconnected() {
         if (closed) return;
-        service = null; binding = false; generation++;
+        forgetBinder();
+        service = null; binding = false; generation++; bindAttempt++;
+        try { Shizuku.unbindUserService(args, connection, false); }
+        catch (RuntimeException ignored) { }
+        main.removeCallbacks(reconnect);
+        if (active) main.postDelayed(reconnect, 1500);
         main.removeCallbacks(poll);
-        listener.changed(new ArrayList<>(), "Window tracking disconnected; start Shizuku and reconnect");
+        listener.changed(new ArrayList<>(), "Shizuku disconnected; reconnecting when the server is available (Android 16 needs Shizuku 13.6+)");
     }
 
     void refresh() {
@@ -129,6 +173,7 @@ final class WindowTracker {
                     if (!error.isEmpty()) status = "Tracking windows; resizing unavailable: " + error;
                 }
             } catch (Exception error) {
+                checkFailure(remote);
                 status = "Window tracking unavailable: " + error.getMessage();
                 windows.clear();
             }
@@ -155,7 +200,7 @@ final class WindowTracker {
         worker.execute(() -> {
             String result;
             try { result = remote.restore(window.id, display, user, work.left, work.top, work.right, work.bottom); }
-            catch (Exception error) { result = "Could not restore window: " + error.getMessage(); }
+            catch (Exception error) { checkFailure(remote); result = "Could not restore window: " + error.getMessage(); }
             final String error = result;
             main.post(() -> {
                 if (closed) return;
@@ -177,7 +222,7 @@ final class WindowTracker {
         worker.execute(() -> {
             String error;
             try { error = remote.activate(packageName, display, user, work.left, work.top, work.right, work.bottom); }
-            catch (Exception failure) { error = failure.getMessage(); }
+            catch (Exception failure) { checkFailure(remote); error = failure.getMessage(); }
             final String result = error;
             main.post(() -> {
                 if (closed) return;
@@ -206,7 +251,7 @@ final class WindowTracker {
                     RunningWindow window = new RunningWindow(tasks.getJSONObject(i));
                     if (packageName.equals(window.packageName)) result.add(window);
                 }
-            } catch (Exception failure) { error = failure.getMessage(); }
+            } catch (Exception failure) { checkFailure(remote); error = failure.getMessage(); }
             final String failure = error;
             main.post(() -> {
                 if (closed) return;
@@ -224,7 +269,7 @@ final class WindowTracker {
         worker.execute(() -> {
             String error;
             try { error = remote.minimize(window.id, display, user); }
-            catch (Exception failure) { error = failure.getMessage(); }
+            catch (Exception failure) { checkFailure(remote); error = failure.getMessage(); }
             final String result = error;
             main.post(() -> {
                 if (closed) return;
@@ -245,7 +290,7 @@ final class WindowTracker {
         worker.execute(() -> {
             String error;
             try { error = remote.lowerDesktop(task, display, user); }
-            catch (Exception failure) { error = failure.getMessage(); }
+            catch (Exception failure) { checkFailure(remote); error = failure.getMessage(); }
             final String result = error;
             main.post(() -> {
                 lowering = false;
@@ -254,6 +299,21 @@ final class WindowTracker {
                     lastOrderingError = result;
                     android.widget.Toast.makeText(activity, "Desktop ordering unavailable: " + result, android.widget.Toast.LENGTH_LONG).show();
                 }
+            });
+        });
+    }
+
+    void taskbarPolicy(boolean samsung) {
+        if (!ready() || closed) return;
+        ITaskService remote = service;
+        worker.execute(() -> {
+            String result;
+            try { result = remote.taskbarPolicy(samsung); }
+            catch (Exception error) { checkFailure(remote); result = error.getMessage(); }
+            final String error = result;
+            main.post(() -> {
+                if (!closed && error != null && !error.isEmpty())
+                    android.widget.Toast.makeText(activity, error, android.widget.Toast.LENGTH_LONG).show();
             });
         });
     }
@@ -281,8 +341,10 @@ final class WindowTracker {
         Shizuku.removeBinderReceivedListener(received);
         Shizuku.removeBinderDeadListener(died);
         Shizuku.removeRequestPermissionResultListener(permission);
+        forgetBinder();
         if (service != null || binding) {
-            try { Shizuku.unbindUserService(args, connection, true); }
+            // Activity recreation must not kill the service used by the replacement Activity.
+            try { Shizuku.unbindUserService(args, connection, false); }
             catch (RuntimeException ignored) { }
         }
         service = null;

@@ -10,5 +10,6 @@ interface ITaskService {
     String lowerDesktop(int taskId, int displayId, int userId) = 4;
     ParcelFileDescriptor wallpaper(int userId) = 5;
     String activate(String packageName, int displayId, int userId, int left, int top, int right, int bottom) = 6;
+    String taskbarPolicy(boolean samsung) = 7;
     void destroy() = 16777114;
 }
