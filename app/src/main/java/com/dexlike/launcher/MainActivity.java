@@ -150,7 +150,11 @@ public class MainActivity extends Activity {
         try {
             // Freeform mode is device-dependent; fall back to a normal launch if denied.
             ActivityOptions options = ActivityOptions.makeBasic();
-            options.setLaunchWindowingMode(5);
+            try {
+                java.lang.reflect.Method method = ActivityOptions.class.getDeclaredMethod("setLaunchWindowingMode", int.class);
+                method.setAccessible(true);
+                method.invoke(options, 5);
+            } catch (Exception ignored) { /* Samsung may restrict this hidden API. */ }
             try { startActivity(intent, options.toBundle()); }
             catch (Exception freeformError) { startActivity(intent); }
             if (drawerOpen) toggleDrawer();
