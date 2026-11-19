@@ -185,6 +185,14 @@ public final class TaskService extends ITaskService.Stub {
     }
 
     private void resizeWindow(Object service, TaskInfo task, Rect fitted) throws Exception {
+        // Samsung's default-display desktop has its own status-bar visibility state,
+        // independent of immersive policy. Otherwise it shifts top=0 below stable insets.
+        try {
+            Object multi = invoke(service, "getMultiTaskingBinder", new Class<?>[]{});
+            Class.forName("com.samsung.android.multiwindow.IMultiTaskingBinder")
+                    .getMethod("updateSystemBarVis", int.class, int.class)
+                    .invoke(multi, 0, android.view.WindowInsets.Type.statusBars());
+        } catch (ClassNotFoundException | NoSuchMethodException otherPlatform) { }
         try {
             // Modern DeX windows belong to a task organizer. Apply their bounds through
             // that organizer rather than relying on the legacy resizeTask path.
