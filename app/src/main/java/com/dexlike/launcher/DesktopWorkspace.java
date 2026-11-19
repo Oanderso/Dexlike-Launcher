@@ -497,6 +497,8 @@ final class DesktopWorkspace extends FrameLayout {
     private void addItem(Item item) {
         if (attach(item)) {
             items.add(item);
+            layoutShortcuts();
+            rememberVisibleShortcutSlots();
             save();
         }
     }
@@ -864,7 +866,8 @@ final class DesktopWorkspace extends FrameLayout {
             removeView(item.view);
             items.remove(item);
             if (item.widget != -1) host.deleteAppWidgetId(item.widget);
-            else layoutShortcuts();
+            layoutShortcuts();
+            rememberVisibleShortcutSlots();
             save();
             return true;
         });

@@ -14,7 +14,11 @@ import java.util.List;
 public final class TaskService extends ITaskService.Stub {
     public TaskService() { }
 
+    // Shizuku documents that non-SDK restrictions do not apply to its user-service process.
+    @android.annotation.SuppressLint("BlockedPrivateApi")
     private Object manager() throws Exception {
+        int uid = android.os.Process.myUid();
+        if (uid != 2000 && uid != 0) throw new SecurityException("Task access requires Shizuku shell identity");
         return Class.forName("android.app.ActivityTaskManager").getDeclaredMethod("getService").invoke(null);
     }
 
