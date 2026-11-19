@@ -1,21 +1,28 @@
 package com.dexlike.launcher;
 
 import android.app.Activity;
-import android.app.ActivityOptions;
-import android.app.ActivityManager;
-import android.content.ComponentName;
+import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.IntentFilter;
+import android.media.AudioManager;
+import android.os.BatteryManager;
+import android.provider.Settings;
+
+import static android.accessibilityservice.AccessibilityService.*;
+import android.app.ActivityOptions;
+import android.graphics.Rect;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
-import android.view.ViewGroup;
 import android.widget.*;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -32,18 +39,39 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private List<ResolveInfo> apps;
     private final ArrayList<String> recent = new ArrayList<>();
+    private LinearLayout dockApps;
+    private DesktopWorkspace workspace;
+    private TextView quickSettings;
+    private final BroadcastReceiver battery = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 0);
+            if (level >= 0 && scale > 0) {
+                String percent = Math.round(level * 100f / scale) + "%";
+                quickSettings.setText(percent + " ▾");
+                quickSettings.setContentDescription("Quick Settings, battery " + percent);
+            }
+        }
+    };
+
+    private enum Placement { DEFAULT, CENTER, LEFT, RIGHT }
+
     private boolean drawerOpen = false;
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (savedInstanceState != null) {
+            ArrayList<String> savedRecent = savedInstanceState.getStringArrayList("recent");
+            if (savedRecent != null) recent.addAll(savedRecent);
+        }
         getWindow().setStatusBarColor(background);
         getWindow().setNavigationBarColor(background);
         prefs = getSharedPreferences("desktop", MODE_PRIVATE);
         loadApps();
-        buildDesktop();
+        buildDesktop(savedInstanceState);
     }
 
-    private int dp(int value) { return (int)(value * getResources().getDisplayMetrics().density + .5f); }
+    int dp(int value) { return (int)(value * getResources().getDisplayMetrics().density + .5f); }
 
     private TextView label(String title, int size) {
         TextView t = new TextView(this);
@@ -59,29 +87,22 @@ public class MainActivity extends Activity {
         Collections.sort(apps, Comparator.comparing(a -> a.loadLabel(getPackageManager()).toString().toLowerCase()));
     }
 
-    private String key(ResolveInfo app) { return app.activityInfo.packageName + "/" + app.activityInfo.name; }
+    String key(ResolveInfo app) { return app.activityInfo.packageName + "/" + app.activityInfo.name; }
 
-    private ResolveInfo find(String key) {
+    ResolveInfo find(String key) {
         for (ResolveInfo a : apps) if (key(a).equals(key)) return a;
         return null;
     }
 
-    private void buildDesktop() {
+    private void buildDesktop(Bundle state) {
         root = new FrameLayout(this);
         root.setBackgroundColor(background);
         setContentView(root);
 
-        TextView title = label("Dexlike Desktop", 27);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        FrameLayout.LayoutParams titleParams = new FrameLayout.LayoutParams(-2, dp(72), Gravity.TOP | Gravity.LEFT);
-        titleParams.leftMargin = dp(22); titleParams.topMargin = dp(20);
-        root.addView(title, titleParams);
-
-        TextView hint = label("Open apps from the taskbar  •  Long-press an app to pin it", 13);
-        hint.setTextColor(0xFFB4C4D6);
-        FrameLayout.LayoutParams hintParams = new FrameLayout.LayoutParams(-2, dp(35), Gravity.TOP | Gravity.LEFT);
-        hintParams.leftMargin = dp(22); hintParams.topMargin = dp(88);
-        root.addView(hint, hintParams);
+        workspace = new DesktopWorkspace(this, prefs, state);
+        FrameLayout.LayoutParams workspaceParams = new FrameLayout.LayoutParams(-1, -1);
+        workspaceParams.bottomMargin = dp(64);
+        root.addView(workspace, workspaceParams);
 
         dock = new LinearLayout(this);
         dock.setGravity(Gravity.CENTER_VERTICAL);
@@ -93,16 +114,104 @@ public class MainActivity extends Activity {
     }
 
     private void refreshDock() {
-        dock.removeAllViews();
-        TextView menu = label("☰  Apps", 17);
-        menu.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        menu.setOnClickListener(v -> toggleDrawer());
-        dock.addView(menu, new LinearLayout.LayoutParams(dp(112), -1));
+        if (dockApps != null) {
+            renderDockApps();
+            return;
+        }
+        TextView appsButton = taskbarButton("Apps", "Open apps", this::toggleDrawer);
+        appsButton.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        appsButton.setOnLongClickListener(v -> { workspace.showMenu(v); return true; });
+        appsButton.setOnContextClickListener(v -> { workspace.showMenu(v); return true; });
+        taskbarButton("◁", "Back", () -> {
+            if (drawerOpen) toggleDrawer();
+            else runSystemAction(GLOBAL_ACTION_BACK);
+        });
+        taskbarButton("⌂", "Home", () -> {
+            if (drawerOpen) toggleDrawer();
+            DesktopActionsService.run(GLOBAL_ACTION_HOME);
+        });
+        taskbarButton("▤", "Recent apps", () -> runSystemAction(GLOBAL_ACTION_RECENTS));
 
-        View divider = new View(this); divider.setBackgroundColor(0xFF60738A);
-        LinearLayout.LayoutParams div = new LinearLayout.LayoutParams(dp(1), dp(35));
-        div.setMargins(dp(5), 0, dp(10), 0); dock.addView(divider, div);
+        HorizontalScrollView dockScroll = new HorizontalScrollView(this);
+        dockScroll.setHorizontalScrollBarEnabled(false);
+        dock.addView(dockScroll, new LinearLayout.LayoutParams(0, -1, 1));
+        dockApps = new LinearLayout(this);
+        dockScroll.addView(dockApps, new FrameLayout.LayoutParams(-2, -1));
 
+        taskbarButton("◖))", "Volume and audio controls", this::showVolume);
+        taskbarButton("▣", "Take screenshot", () -> runSystemAction(GLOBAL_ACTION_TAKE_SCREENSHOT));
+        quickSettings = taskbarButton("▾", "Quick Settings", () -> runSystemAction(GLOBAL_ACTION_QUICK_SETTINGS));
+
+        LinearLayout dateTime = new LinearLayout(this);
+        dateTime.setOrientation(LinearLayout.VERTICAL);
+        dateTime.setGravity(Gravity.CENTER_VERTICAL);
+        dateTime.setPadding(dp(6), 0, dp(4), 0);
+        TextClock clock = trayClock();
+        dateTime.addView(clock, new LinearLayout.LayoutParams(-1, -2));
+        TextClock date = trayClock();
+        date.setFormat12Hour("EEE, MMM d");
+        date.setFormat24Hour("EEE, MMM d");
+        dateTime.addView(date, new LinearLayout.LayoutParams(-1, -2));
+        dateTime.setOnClickListener(v -> runSystemAction(GLOBAL_ACTION_NOTIFICATIONS));
+        dateTime.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+            @Override public void onInitializeAccessibilityNodeInfo(View host,
+                    android.view.accessibility.AccessibilityNodeInfo info) {
+                super.onInitializeAccessibilityNodeInfo(host, info);
+                info.setContentDescription(clock.getText() + ", " + date.getText() + ", Open notifications");
+            }
+        });
+        dock.addView(dateTime, new LinearLayout.LayoutParams(-2, -1));
+        renderDockApps();
+    }
+
+    private TextClock trayClock() {
+        TextClock view = new TextClock(this);
+        view.setTextColor(textColor);
+        view.setTextSize(12);
+        view.setGravity(Gravity.END);
+        view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        return view;
+    }
+
+    private TextView taskbarButton(String text, String description, Runnable action) {
+        TextView button = label(text, 14);
+        button.setMinWidth(dp(40));
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(dp(5), 0, dp(5), 0);
+        button.setContentDescription(description);
+        button.setTooltipText(description);
+        button.setOnClickListener(v -> action.run());
+        dock.addView(button, new LinearLayout.LayoutParams(-2, -1));
+        return button;
+    }
+
+    private void showVolume() {
+        AudioManager audio = getSystemService(AudioManager.class);
+        audio.adjustSuggestedStreamVolume(AudioManager.ADJUST_SAME,
+                AudioManager.USE_DEFAULT_STREAM_TYPE, AudioManager.FLAG_SHOW_UI);
+    }
+
+    private void runSystemAction(int action) {
+        if (DesktopActionsService.run(action)) return;
+        if (DesktopActionsService.isConnected()) {
+            Toast.makeText(this, "That action is unavailable on this display", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Enable taskbar controls")
+                .setMessage("In Android Accessibility settings, enable Dexlike taskbar controls to open system panels from the taskbar.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Open settings", (dialog, choice) -> {
+                    try {
+                        startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                    } catch (ActivityNotFoundException e) {
+                        Toast.makeText(this, "Accessibility settings are unavailable", Toast.LENGTH_SHORT).show();
+                    }
+                }).show();
+    }
+
+    private void renderDockApps() {
+        dockApps.removeAllViews();
         String pinned = prefs.getString("pinned", "");
         ArrayList<String> visible = new ArrayList<>();
         if (!pinned.isEmpty()) for (String key : pinned.split("\\|")) if (find(key) != null && !visible.contains(key)) visible.add(key);
@@ -120,13 +229,58 @@ public class MainActivity extends Activity {
             name.setPadding(dp(2), 0, dp(2), 0);
             entry.addView(name, new LinearLayout.LayoutParams(dp(90), dp(20)));
             entry.setOnClickListener(v -> launch(app));
-            entry.setOnLongClickListener(v -> { togglePin(key); return true; });
-            dock.addView(entry, new LinearLayout.LayoutParams(dp(98), -1));
+            if (recent.contains(key)) {
+                View indicator = new View(this);
+                indicator.setBackgroundColor(0xFF98BDE9);
+                entry.addView(indicator, new LinearLayout.LayoutParams(dp(16), dp(2)));
+            }
+            bindAppMenu(entry, app);
+            dockApps.addView(entry, new LinearLayout.LayoutParams(dp(98), -1));
         }
-        Space space = new Space(this);
-        dock.addView(space, new LinearLayout.LayoutParams(0, 1, 1));
-        TextView clock = label(java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(new java.util.Date()), 13);
-        dock.addView(clock);
+    }
+
+    private void bindAppMenu(View anchor, ResolveInfo app) {
+        anchor.setOnLongClickListener(v -> {
+            showAppMenu(v, app);
+            return true;
+        });
+        anchor.setOnContextClickListener(v -> {
+            showAppMenu(v, app);
+            return true;
+        });
+    }
+
+    private void showAppMenu(View anchor, ResolveInfo app) {
+        String appKey = key(app);
+        boolean pinned = java.util.Arrays.asList(prefs.getString("pinned", "").split("\\|")).contains(appKey);
+        PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenu().add(pinned ? "Unpin from dock" : "Pin to dock")
+                .setOnMenuItemClickListener(item -> { togglePin(appKey); return true; });
+        menu.getMenu().add("Add to desktop").setOnMenuItemClickListener(item -> {
+            workspace.addShortcut(app);
+            if (drawerOpen) toggleDrawer();
+            return true;
+        });
+        if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_FREEFORM_WINDOW_MANAGEMENT)) {
+            addPlacement(menu, app, "Open centered", Placement.CENTER);
+            addPlacement(menu, app, "Open on left", Placement.LEFT);
+            addPlacement(menu, app, "Open on right", Placement.RIGHT);
+        }
+        if (recent.contains(appKey)) {
+            menu.getMenu().add("Clear from recent apps").setOnMenuItemClickListener(item -> {
+                recent.remove(appKey);
+                refreshDock();
+                return true;
+            });
+        }
+        menu.show();
+    }
+
+    private void addPlacement(PopupMenu menu, ResolveInfo app, String title, Placement placement) {
+        menu.getMenu().add(title).setOnMenuItemClickListener(item -> {
+            launch(app, placement);
+            return true;
+        });
     }
 
     private void togglePin(String key) {
@@ -139,10 +293,12 @@ public class MainActivity extends Activity {
         refreshDock();
     }
 
-    private void launch(ResolveInfo app) {
+    void launch(ResolveInfo app) {
+        launch(app, Placement.DEFAULT);
+    }
+
+    private void launch(ResolveInfo app, Placement placement) {
         String key = key(app);
-        recent.remove(key); recent.add(0, key);
-        if (recent.size() > 8) recent.remove(recent.size() - 1);
         Intent intent = new Intent(Intent.ACTION_MAIN);
         intent.addCategory(Intent.CATEGORY_LAUNCHER);
         intent.setComponent(new ComponentName(app.activityInfo.packageName, app.activityInfo.name));
@@ -155,13 +311,47 @@ public class MainActivity extends Activity {
                 method.setAccessible(true);
                 method.invoke(options, 5);
             } catch (Exception ignored) { /* Samsung may restrict this hidden API. */ }
+            Rect bounds = launchBounds(placement);
+            if (bounds != null) options.setLaunchBounds(bounds);
             try { startActivity(intent, options.toBundle()); }
             catch (Exception freeformError) { startActivity(intent); }
+            if (!recent.contains(key)) {
+                recent.add(key);
+                if (recent.size() > 8) recent.remove(0);
+            }
             if (drawerOpen) toggleDrawer();
             refreshDock();
         } catch (Exception e) {
             Toast.makeText(this, "Cannot launch app: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    private Rect launchBounds(Placement placement) {
+        if (placement == Placement.DEFAULT || dock.getTop() <= 0) return null;
+
+        int[] origin = new int[2];
+        root.getLocationOnScreen(origin);
+        Rect workspace = new Rect(origin[0], origin[1],
+                origin[0] + root.getWidth(), origin[1] + dock.getTop());
+        int gap = dp(8);
+        workspace.inset(gap, gap);
+        if (workspace.width() < gap * 2 || workspace.height() < gap * 2) return null;
+
+        int middle = workspace.centerX();
+        switch (placement) {
+            case LEFT:
+                workspace.right = middle - gap / 2;
+                break;
+            case RIGHT:
+                workspace.left = middle + gap / 2;
+                break;
+            case CENTER:
+                workspace.inset(workspace.width() / 8, workspace.height() / 8);
+                break;
+            default:
+                break;
+        }
+        return workspace;
     }
 
     private void toggleDrawer() {
@@ -199,7 +389,7 @@ public class MainActivity extends Activity {
                 TextView name = label(title, 15);
                 row.addView(name, new LinearLayout.LayoutParams(0, dp(52), 1));
                 row.setOnClickListener(v -> launch(app));
-                row.setOnLongClickListener(v -> { togglePin(key(app)); return true; });
+                bindAppMenu(row, app);
                 list.addView(row);
             }
         };
@@ -209,6 +399,29 @@ public class MainActivity extends Activity {
             public void afterTextChanged(android.text.Editable s) {}
         });
         render.run();
+    }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putStringArrayList("recent", new ArrayList<>(recent));
+        workspace.saveState(state);
+    }
+
+    @Override protected void onStart() {
+        super.onStart();
+        workspace.onStart();
+        registerReceiver(battery, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+    }
+
+    @Override protected void onStop() {
+        unregisterReceiver(battery);
+        workspace.onStop();
+        super.onStop();
+    }
+
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        workspace.onResult(request, result, data);
     }
 
     @Override protected void onResume() { super.onResume(); if (dock != null) refreshDock(); }
