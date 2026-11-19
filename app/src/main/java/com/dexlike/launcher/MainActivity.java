@@ -21,6 +21,9 @@ import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
+import android.os.Build;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.*;
@@ -74,6 +77,17 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("desktop", MODE_PRIVATE);
         loadApps();
         buildDesktop(savedInstanceState);
+        if (Build.VERSION.SDK_INT >= 30) {
+            root.setOnApplyWindowInsetsListener((view, insets) -> {
+                if (insets.isVisible(WindowInsets.Type.navigationBars())) scheduleBarSuppression();
+                return insets;
+            });
+        } else {
+            getWindow().getDecorView().setOnSystemUiVisibilityChangeListener(flags -> {
+                if ((flags & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION) == 0) scheduleBarSuppression();
+            });
+        }
+        suppressSystemBars();
     }
 
     int dp(int value) { return (int)(value * getResources().getDisplayMetrics().density + .5f); }
@@ -267,14 +281,22 @@ public class MainActivity extends Activity {
         SeekBar desktopSize = addSizeSetting(settings, "Desktop shortcut icons", MIN_SHORTCUT_ICON_SIZE,
                 MAX_SHORTCUT_ICON_SIZE, shortcutIconSize());
 
+        CheckBox suppressBars = new CheckBox(this);
+        suppressBars.setText("Hide system bars on the desktop");
+        suppressBars.setTextColor(textColor);
+        suppressBars.setChecked(prefs.getBoolean("suppressSystemBars", true));
+        settings.addView(suppressBars);
+        TextView explanation = label("Samsung may briefly reveal its taskbar. Applies while Dexlike is focused.", 12);
+        settings.addView(explanation);
         new AlertDialog.Builder(this).setTitle("Dexlike Launcher settings").setView(settings)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Save", (dialog, which) -> {
-                    prefs.edit().putInt("taskbarIconSize", MIN_TASKBAR_ICON_SIZE + taskbarSize.getProgress())
+                    prefs.edit().putBoolean("suppressSystemBars", suppressBars.isChecked()).putInt("taskbarIconSize", MIN_TASKBAR_ICON_SIZE + taskbarSize.getProgress())
                             .putInt("shortcutIconSize", MIN_SHORTCUT_ICON_SIZE + desktopSize.getProgress()).apply();
                     updateTaskbarHeight();
                     renderDockApps();
                     workspace.updateShortcutIconSizes();
+                    suppressSystemBars();
                 }).show();
     }
 
@@ -506,6 +528,7 @@ public class MainActivity extends Activity {
     @Override protected void onStop() {
         unregisterReceiver(battery);
         workspace.onStop();
+        root.removeCallbacks(rehideBars);
         super.onStop();
     }
 
@@ -514,6 +537,43 @@ public class MainActivity extends Activity {
         workspace.onResult(request, result, data);
     }
 
-    @Override protected void onResume() { super.onResume(); if (dock != null) refreshDock(); }
+    // Reassert the request on reveal/focus changes, without a permanent polling loop.
+    private final Runnable rehideBars = this::suppressSystemBars;
+
+    private void scheduleBarSuppression() {
+        if (root == null || !hasWindowFocus() || !prefs.getBoolean("suppressSystemBars", true)) return;
+        root.removeCallbacks(rehideBars);
+        root.postDelayed(rehideBars, 100);
+    }
+
+    private void suppressSystemBars() {
+        if (root == null || !hasWindowFocus()) return;
+        boolean hide = prefs.getBoolean("suppressSystemBars", true);
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller != null) {
+                controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                if (hide) controller.hide(WindowInsets.Type.systemBars());
+                else controller.show(WindowInsets.Type.systemBars());
+            }
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(hide
+                    ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN : 0);
+        }
+    }
+
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (focused) suppressSystemBars();
+        else if (root != null) root.removeCallbacks(rehideBars);
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (dock != null) refreshDock();
+        scheduleBarSuppression();
+    }
     @Override public void onBackPressed() { if (drawerOpen) toggleDrawer(); else super.onBackPressed(); }
 }

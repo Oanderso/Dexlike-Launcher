@@ -6,7 +6,10 @@ A launcher for Android tablets similar to the classic DEX mode.
 - Right-click or touch and hold an empty area for **Add app**, **Add widget**, **Settings**, and wallpaper options. The same menu is available by right-clicking or holding **Apps** in the taskbar.
 - In the app drawer, right-click or touch and hold an app and choose **Add to desktop**. Drag desktop shortcuts to move them between grid cells.
 - Open **Settings** from the desktop context menu or click the taskbar gear to adjust taskbar and desktop shortcut icon sizes independently.
-- Drag a widget's title to move it. Drag **Resize**, or click it for step-by-step size adjustments. The widget provider determines which axes can be resized and the size limits. Widgets may open a setup screen on first use.
+- Widgets display only their content. Long-press or right-click a widget to reveal editing controls. Drag a corner to resize, or drag its title to move it. Click **Done** or empty desktop space to hide the controls. **Widget options → Resize options** also provides accessible size adjustments. Provider limits and supported axes are respected.
+- **Add widget** shows provider preview images or preview layouts. Providers without either show their icon and an explicit preview-unavailable label. Binding/configuration starts only after selecting a widget.
+- The desktop menu opens at the touch or pointer position, moving inward near screen edges.
+- **Hide system bars on the desktop** is enabled by default in Dexlike settings. Dexlike requests immersive mode again after focus returns or Android reports that navigation bars are visible. This affects Dexlike only; Samsung can override it, reveal the bar briefly, or show it in other apps. It does not disable system gestures or alter global ADB settings.
 - Select the date and time to open Android notifications. The taskbar also has Back, Home, Recents, audio, Screenshot and Quick Settings controls.
 - To open Android system panels from the taskbar, enable **Dexlike taskbar controls** in Android Accessibility settings. The service requests system actions when you press a taskbar button and has no access to window content. The notification shade and Quick Settings are Android's own panels.
 
