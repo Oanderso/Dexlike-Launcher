@@ -263,13 +263,11 @@ public final class TaskService extends ITaskService.Stub {
                 policy = policy == null ? "" : policy.trim();
             }
             read.waitFor();
-            if (samsung && "immersive.full=*".equals(policy)) {
-                Process write = new ProcessBuilder("settings", "put", "global", "policy_control", "immersive.status=*").start();
-                return write.waitFor() == 0 ? "" : "Could not allow Samsung taskbar";
-            }
-            if (!samsung && "immersive.status=*".equals(policy)) {
+            // Repair preview 27's permanent navigation-bar policy in either icon mode.
+            // Selecting Samsung icons must not force the native bar to stay visible.
+            if ("immersive.status=*".equals(policy)) {
                 Process write = new ProcessBuilder("settings", "put", "global", "policy_control", "immersive.full=*").start();
-                return write.waitFor() == 0 ? "" : "Could not hide Samsung taskbar";
+                return write.waitFor() == 0 ? "" : "Could not restore transient system bars";
             }
             return "";
         } catch (Exception error) { return message(error); }

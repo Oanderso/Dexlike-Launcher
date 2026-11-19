@@ -49,7 +49,6 @@ public class MainActivity extends Activity {
     private FrameLayout root;
     private LinearLayout drawer;
     private PopupWindow drawerPopup;
-    private int samsungBarInset;
     private SharedPreferences prefs;
     private List<ResolveInfo> apps;
     private final ArrayList<String> recent = new ArrayList<>();
@@ -120,13 +119,9 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 30) {
             root.setOnApplyWindowInsetsListener((view, insets) -> {
                 if (insets.isVisible(WindowInsets.Type.navigationBars()) || insets.isVisible(WindowInsets.Type.statusBars())) scheduleBarSuppression();
-                if (samsungTaskbar()) {
-                    int bottom = insets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars()).bottom;
-                    if (bottom > 0 && bottom != samsungBarInset) {
-                        samsungBarInset = bottom;
-                        updateTaskbarHeight();
-                    }
-                }
+                // A transient native taskbar may overlay the desktop, but must never reflow it.
+                int nativeBottom = samsungTaskbar() ? insets.getInsets(WindowInsets.Type.navigationBars()).bottom : 0;
+                dock.setTranslationY(-nativeBottom);
                 return insets;
             });
         } else {
@@ -173,7 +168,7 @@ public class MainActivity extends Activity {
 
         workspace = new DesktopWorkspace(this, prefs, state);
         FrameLayout.LayoutParams workspaceParams = new FrameLayout.LayoutParams(-1, -1);
-        workspaceParams.bottomMargin = taskbarHeight() + nativeTaskbarHeight();
+        workspaceParams.bottomMargin = taskbarHeight();
         root.addView(workspace, workspaceParams);
 
         dock = new LinearLayout(this);
@@ -181,7 +176,7 @@ public class MainActivity extends Activity {
         dock.setPadding(dp(8), dp(5), dp(8), dp(5));
         dock.setBackgroundColor(surface);
         FrameLayout.LayoutParams dockParams = new FrameLayout.LayoutParams(-1, taskbarHeight(), Gravity.BOTTOM);
-        dockParams.bottomMargin = nativeTaskbarHeight();
+        dockParams.bottomMargin = 0;
         root.addView(dock, dockParams);
         refreshDock();
     }
@@ -326,8 +321,6 @@ public class MainActivity extends Activity {
 
     private boolean samsungTaskbar() { return prefs.getBoolean("samsungTaskbar", false); }
 
-    private int nativeTaskbarHeight() { return samsungTaskbar() ? Math.max(samsungBarInset, dp(64)) : 0; }
-
     void applyTaskbarPolicy() {
         if (prefs.contains("samsungTaskbar") && windowTracker != null) windowTracker.taskbarPolicy(samsungTaskbar());
     }
@@ -349,7 +342,7 @@ public class MainActivity extends Activity {
     private void updateTaskbarHeight() {
         FrameLayout.LayoutParams dockParams = (FrameLayout.LayoutParams) dock.getLayoutParams();
         dockParams.height = taskbarHeight();
-        dockParams.bottomMargin = nativeTaskbarHeight();
+        dockParams.bottomMargin = 0;
         dock.setLayoutParams(dockParams);
         updateBottomMargin(workspace);
 
@@ -358,7 +351,7 @@ public class MainActivity extends Activity {
 
     private void updateBottomMargin(View view) {
         FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) view.getLayoutParams();
-        params.bottomMargin = taskbarHeight() + nativeTaskbarHeight();
+        params.bottomMargin = taskbarHeight();
         view.setLayoutParams(params);
     }
 
@@ -401,12 +394,21 @@ public class MainActivity extends Activity {
         SeekBar desktopSize = addSizeSetting(settings, "Desktop shortcut icons", MIN_SHORTCUT_ICON_SIZE,
                 MAX_SHORTCUT_ICON_SIZE, shortcutIconSize());
 
-        Switch samsung = new Switch(this);
-        samsung.setText("Use Samsung taskbar app icons");
+        settings.addView(label("Taskbar app icons", 17));
+        RadioGroup taskbarSource = new RadioGroup(this);
+        RadioButton dexlike = new RadioButton(this);
+        dexlike.setId(View.generateViewId());
+        dexlike.setText("Dexlike taskbar");
+        dexlike.setTextColor(textColor);
+        taskbarSource.addView(dexlike);
+        RadioButton samsung = new RadioButton(this);
+        samsung.setId(View.generateViewId());
+        samsung.setText("Samsung taskbar (swipe to reveal)");
         samsung.setTextColor(textColor);
-        samsung.setChecked(samsungTaskbar());
-        settings.addView(samsung);
-        settings.addView(label("Hides Dexlike app icons and keeps its controls above Samsung’s taskbar. Samsung controls its own buttons; apps-only is not available through Android. Connect Shizuku to undo Dexlike’s ADB navigation hiding.", 12));
+        taskbarSource.addView(samsung);
+        taskbarSource.check(samsungTaskbar() ? samsung.getId() : dexlike.getId());
+        settings.addView(taskbarSource);
+        settings.addView(label("Dexlike shows its app icons. Samsung hides those icons and uses the native taskbar when revealed. Both retain Dexlike’s other controls without shrinking the desktop. Samsung controls its own buttons. Connect Shizuku to repair the previous permanent-bar setting.", 12));
 
         Switch iconGrid = new Switch(this);
         iconGrid.setText("Apps drawer: icons only, three columns");
@@ -448,6 +450,7 @@ public class MainActivity extends Activity {
                     prefs.edit().putBoolean("samsungTaskbar", samsung.isChecked()).putBoolean("drawerIconGrid", iconGrid.isChecked())
                             .putBoolean("suppressSystemBars", suppressBars.isChecked()).putInt("taskbarIconSize", MIN_TASKBAR_ICON_SIZE + taskbarSize.getProgress())
                             .putInt("shortcutIconSize", MIN_SHORTCUT_ICON_SIZE + desktopSize.getProgress()).apply();
+                    dock.setTranslationY(0);
                     updateTaskbarHeight();
                     renderDockApps();
                     workspace.updateShortcutIconSizes();
@@ -734,7 +737,7 @@ public class MainActivity extends Activity {
         int[] origin = new int[2];
         root.getLocationOnScreen(origin);
         return new Rect(origin[0], origin[1], origin[0] + root.getWidth(),
-                origin[1] + root.getHeight() - taskbarHeight() - nativeTaskbarHeight());
+                origin[1] + root.getHeight() - taskbarHeight());
     }
 
     private Rect launchBounds(Placement placement) {
@@ -777,7 +780,7 @@ public class MainActivity extends Activity {
         drawer.setBackgroundColor(0xFF2B4059);
         drawer.setPadding(dp(12), dp(12), dp(12), dp(12));
         drawerPopup = new PopupWindow(drawer, Math.min(dp(380), root.getWidth()),
-                Math.min(dp(620), Math.max(dp(100), root.getHeight() - taskbarHeight() - nativeTaskbarHeight())), true);
+                Math.min(dp(620), Math.max(dp(100), root.getHeight() - taskbarHeight())), true);
         drawerPopup.setBackgroundDrawable(new ColorDrawable(0xFF2B4059));
         drawerPopup.setOutsideTouchable(true);
         drawerPopup.setInputMethodMode(PopupWindow.INPUT_METHOD_NEEDED);
@@ -844,7 +847,7 @@ public class MainActivity extends Activity {
             public void afterTextChanged(android.text.Editable s) {}
         });
         renderDrawer.run();
-        drawerPopup.showAtLocation(root, Gravity.BOTTOM | Gravity.LEFT, 0, taskbarHeight() + nativeTaskbarHeight());
+        drawerPopup.showAtLocation(root, Gravity.BOTTOM | Gravity.LEFT, 0, taskbarHeight());
         search.requestFocus();
         search.post(() -> {
             if (drawerOpen && drawerSearch == search) {
@@ -890,7 +893,7 @@ public class MainActivity extends Activity {
     private void scheduleBarSuppression() {
         if (root == null || !hasWindowFocus() || !prefs.getBoolean("suppressSystemBars", true)) return;
         root.removeCallbacks(rehideBars);
-        root.postDelayed(rehideBars, 100);
+        root.postDelayed(rehideBars, samsungTaskbar() ? 3000 : 100);
     }
 
     private void suppressSystemBars() {
@@ -900,9 +903,8 @@ public class MainActivity extends Activity {
             WindowInsetsController controller = getWindow().getInsetsController();
             if (controller != null) {
                 controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-                if (hide) controller.hide(samsungTaskbar() ? WindowInsets.Type.statusBars() : WindowInsets.Type.systemBars());
+                if (hide) controller.hide(WindowInsets.Type.systemBars());
                 else controller.show(WindowInsets.Type.systemBars());
-                if (samsungTaskbar()) controller.show(WindowInsets.Type.navigationBars());
             }
         } else {
             getWindow().getDecorView().setSystemUiVisibility(hide
