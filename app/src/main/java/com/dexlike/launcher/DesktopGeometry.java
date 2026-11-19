@@ -17,6 +17,11 @@ final class DesktopGeometry {
         return new int[]{left, top, right, bottom};
     }
 
+    static int[] snapHalf(int left, int top, int right, int bottom, boolean rightHalf) {
+        int middle = left + (right - left) / 2;
+        return new int[]{rightHalf ? middle : left, top, rightHalf ? right : middle, bottom};
+    }
+
     static int cellWidth(int icon) { return Math.max(96, icon + 24); }
     static int cellHeight(int icon) { return Math.max(92, icon + 50); }
     static boolean overlaps(int x, int y, int width, int height, int otherX, int otherY, int otherWidth, int otherHeight) {

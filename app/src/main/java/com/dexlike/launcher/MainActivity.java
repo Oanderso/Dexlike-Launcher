@@ -813,25 +813,12 @@ public class MainActivity extends Activity {
     private Rect launchBounds(Placement placement) {
         Rect workspace = desktopWorkArea();
         if (workspace == null) return null;
-        int gap = dp(8);
-        workspace.inset(gap, gap);
-        if (workspace.width() < gap * 2 || workspace.height() < gap * 2) return null;
-
-        int middle = workspace.centerX();
-        switch (placement) {
-            case LEFT:
-                workspace.right = middle - gap / 2;
-                break;
-            case RIGHT:
-                workspace.left = middle + gap / 2;
-                break;
-            case DEFAULT:
-            case CENTER:
-                workspace.inset(workspace.width() / 8, workspace.height() / 8);
-                break;
-            default:
-                break;
+        if (placement == Placement.LEFT || placement == Placement.RIGHT) {
+            int[] bounds = DesktopGeometry.snapHalf(workspace.left, workspace.top, workspace.right, workspace.bottom,
+                    placement == Placement.RIGHT);
+            return new Rect(bounds[0], bounds[1], bounds[2], bounds[3]);
         }
+        workspace.inset(workspace.width() / 8, workspace.height() / 8);
         return workspace;
     }
 

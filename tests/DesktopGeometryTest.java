@@ -20,6 +20,12 @@ public final class DesktopGeometryTest {
         for (DesktopGeometry.Edge edge : DesktopGeometry.Edge.values()) {
             for (int thickness : new int[]{64, 72, 134}) {
                 int[] area = DesktopGeometry.workArea(10, 20, 1920, 1200, thickness, edge);
+                for (boolean rightHalf : new boolean[]{false, true}) {
+                    int[] half = DesktopGeometry.snapHalf(area[0], area[1], area[2], area[3], rightHalf);
+                    if (half[1] != area[1] || half[3] != area[3]) throw new AssertionError("snap left a status/taskbar gap");
+                    if ((!rightHalf && half[0] != area[0]) || (rightHalf && half[2] != area[2]))
+                        throw new AssertionError("snap crossed dock edge");
+                }
                 int[] snapped = DesktopGeometry.fit(10, 20, 1920, 1200, area[0], area[1], area[2], area[3]);
                 if (!java.util.Arrays.equals(area, snapped)) throw new AssertionError("snap overlaps " + edge);
                 if (area[0] != 10 + (edge == DesktopGeometry.Edge.LEFT ? thickness : 0)
