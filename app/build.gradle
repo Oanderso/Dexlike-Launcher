@@ -27,5 +27,9 @@ android {
             if (signingPath) signingConfig signingConfigs.release
         }
     }
+    lint {
+        // This build is sideloaded. Keep the existing target SDK until a compatibility update.
+        disable 'ExpiredTargetSdkVersion'
+    }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }
