@@ -88,8 +88,12 @@ public class MainActivity extends Activity {
             ArrayList<String> savedRecent = savedInstanceState.getStringArrayList("recent");
             if (savedRecent != null) recent.addAll(savedRecent);
         }
-        getWindow().setStatusBarColor(background);
-        getWindow().setNavigationBarColor(background);
+        if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
+        else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(Color.TRANSPARENT);
         prefs = getSharedPreferences("desktop", MODE_PRIVATE);
         loadApps();
         icons = new IconStyle(this, prefs, () -> {
@@ -113,7 +117,9 @@ public class MainActivity extends Activity {
         });
         if (Build.VERSION.SDK_INT >= 30) {
             root.setOnApplyWindowInsetsListener((view, insets) -> {
-                if (insets.isVisible(WindowInsets.Type.navigationBars())) scheduleBarSuppression();
+                if (insets.isVisible(WindowInsets.Type.navigationBars()) || insets.isVisible(WindowInsets.Type.statusBars())) scheduleBarSuppression();
+                if (drawer != null) drawer.setPadding(dp(12), dp(12), dp(12),
+                        dp(12) + insets.getInsets(WindowInsets.Type.ime()).bottom);
                 return insets;
             });
         } else {
@@ -834,7 +840,8 @@ public class MainActivity extends Activity {
             getWindow().getDecorView().setSystemUiVisibility(hide
                     ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                     | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN : 0);
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    : View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
         }
     }
 

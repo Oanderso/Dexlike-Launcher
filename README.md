@@ -15,6 +15,7 @@ A launcher for Android tablets similar to the classic DEX mode.
 
 ## Drawer, icons and desktop input
 
+- The desktop uses stable, edge-to-edge bounds. Transient status/navigation bars overlay the desktop instead of shrinking its icon/widget layout. The app drawer alone adapts to the keyboard.
 - **Apps** focuses search immediately, including physical-keyboard typing. Settings can switch between a named app list and an **icons-only three-column** vertical scroll. Icon names remain available as tooltips/accessibility descriptions.
 - **Icon style** in settings lists installed ADW/Nova-compatible packs and **System icons**. Component mappings from `appfilter.xml` are applied to desktop, drawer and dock. Missing mappings use the original app icon. Generated icon masks/backgrounds and proprietary icon-pack formats are not supported.
 - Taskbar and desktop shortcut icon sizes can each reach **100 dp**. Shortcut grid cells, dock entries and dock/window work-area height expand to fit.
@@ -53,13 +54,13 @@ adb shell am start -a android.settings.ACCESSIBILITY_SETTINGS
 
 Enable **Installed apps → Dexlike taskbar controls**. If blocked as a restricted setting, first allow restricted settings under **Settings → Apps → Dexlike Launcher → ⋮**. Do not replace the entire enabled-accessibility-services setting: that would turn off other services. No WRITE_SECURE_SETTINGS, overlay, or usage-access grant is required for this implementation.
 
-Optional global navigation suppression, if Samsung ignores Dexlike's own immersive request:
+Optional global status/navigation suppression, if Samsung ignores Dexlike's own immersive request:
 
 ```sh
-adb shell settings put global policy_control immersive.navigation=*
+adb shell settings put global policy_control immersive.full=*
 ```
 
-This applies beyond Dexlike and allows edge-swipe reveal. To remove this override (when no previous policy was configured):
+This hides both status and navigation bars beyond Dexlike and allows edge-swipe reveal. To restore navigation-only suppression, use `adb shell settings put global policy_control immersive.navigation=*`. To remove this override (when no previous policy was configured):
 
 ```sh
 adb shell settings delete global policy_control

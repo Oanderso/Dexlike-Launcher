@@ -43,7 +43,9 @@ public final class TaskService extends ITaskService.Stub {
         java.util.LinkedHashMap<Integer, TaskInfo> result = new java.util.LinkedHashMap<>();
         for (TaskInfo info : liveTasks(service, display)) result.put(info.taskId, info);
         Object slice = invoke(service, "getRecentTasks", new Class<?>[]{int.class, int.class, int.class}, 256, 2, user);
-        List<TaskInfo> recent = (List<TaskInfo>) slice.getClass().getMethod("getList").invoke(slice);
+        Method listMethod = slice.getClass().getMethod("getList");
+        listMethod.setAccessible(true);
+        List<TaskInfo> recent = (List<TaskInfo>) listMethod.invoke(slice);
         for (TaskInfo info : recent) if (info.taskId >= 0) result.putIfAbsent(info.taskId, info);
         return new java.util.ArrayList<>(result.values());
     }
