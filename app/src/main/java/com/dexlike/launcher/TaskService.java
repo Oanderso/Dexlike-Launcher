@@ -181,10 +181,23 @@ public final class TaskService extends ITaskService.Stub {
 
     @Override public String minimize(int id, int display, int user) {
         try {
-            task(manager(), id, display, user);
+            Object service = manager();
+            TaskInfo task = task(service, id, display, user);
             Object samsung = samsung();
             boolean success = (Boolean) samsung.getClass().getMethod("minimizeTaskById", int.class).invoke(samsung, id);
-            if (!success) return "Samsung did not allow this window to minimize";
+            if (success) return "";
+            if (android.os.Build.VERSION.SDK_INT < 35 || mode(task) != 5)
+                return "Samsung did not allow this window to minimize";
+            // Modern DeX uses WM Shell's MINIMIZE transition (1020), not legacy Samsung minimization.
+            // Verified against this tablet's FreeformTaskTransitionHandler; this private API may change.
+            Class<?> transactionClass = Class.forName("android.window.WindowContainerTransaction");
+            Object transaction = transactionClass.getConstructor().newInstance();
+            Object token = task.getClass().getField("token").get(task);
+            transactionClass.getMethod("reorder", Class.forName("android.window.WindowContainerToken"), boolean.class)
+                    .invoke(transaction, token, false);
+            Object organizer = invoke(service, "getWindowOrganizerController", new Class<?>[]{});
+            Class.forName("android.window.IWindowOrganizerController")
+                    .getMethod("startNewTransition", int.class, transactionClass).invoke(organizer, 1020, transaction);
             return "";
         } catch (Exception error) { return message(error); }
     }
