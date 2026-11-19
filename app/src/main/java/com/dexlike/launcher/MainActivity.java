@@ -30,6 +30,11 @@ import java.util.Comparator;
 import java.util.List;
 
 public class MainActivity extends Activity {
+    private static final int MIN_TASKBAR_ICON_SIZE = 16;
+    private static final int MAX_TASKBAR_ICON_SIZE = 48;
+    private static final int MIN_SHORTCUT_ICON_SIZE = 24;
+    private static final int MAX_SHORTCUT_ICON_SIZE = 56;
+
     private final int background = Color.rgb(21, 31, 47);
     private final int surface = Color.rgb(38, 54, 76);
     private final int textColor = Color.WHITE;
@@ -101,14 +106,14 @@ public class MainActivity extends Activity {
 
         workspace = new DesktopWorkspace(this, prefs, state);
         FrameLayout.LayoutParams workspaceParams = new FrameLayout.LayoutParams(-1, -1);
-        workspaceParams.bottomMargin = dp(64);
+        workspaceParams.bottomMargin = taskbarHeight();
         root.addView(workspace, workspaceParams);
 
         dock = new LinearLayout(this);
         dock.setGravity(Gravity.CENTER_VERTICAL);
         dock.setPadding(dp(8), dp(5), dp(8), dp(5));
         dock.setBackgroundColor(surface);
-        FrameLayout.LayoutParams dockParams = new FrameLayout.LayoutParams(-1, dp(64), Gravity.BOTTOM);
+        FrameLayout.LayoutParams dockParams = new FrameLayout.LayoutParams(-1, taskbarHeight(), Gravity.BOTTOM);
         root.addView(dock, dockParams);
         refreshDock();
     }
@@ -210,8 +215,75 @@ public class MainActivity extends Activity {
                 }).show();
     }
 
+    private int taskbarIconSize() {
+        return prefs.getInt("taskbarIconSize", 27);
+    }
+
+    private int taskbarHeight() {
+        return dp(Math.max(64, taskbarIconSize() + 34));
+    }
+
+    private void updateTaskbarHeight() {
+        FrameLayout.LayoutParams dockParams = (FrameLayout.LayoutParams) dock.getLayoutParams();
+        dockParams.height = taskbarHeight();
+        dock.setLayoutParams(dockParams);
+        updateBottomMargin(workspace);
+        if (drawer != null) updateBottomMargin(drawer);
+    }
+
+    private void updateBottomMargin(View view) {
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) view.getLayoutParams();
+        params.bottomMargin = taskbarHeight();
+        view.setLayoutParams(params);
+    }
+
+    int shortcutIconSize() {
+        return prefs.getInt("shortcutIconSize", 42);
+    }
+
+    void showDesktopSettings() {
+        LinearLayout settings = new LinearLayout(this);
+        settings.setOrientation(LinearLayout.VERTICAL);
+        settings.setPadding(dp(16), dp(8), dp(16), dp(8));
+
+        SeekBar taskbarSize = addSizeSetting(settings, "Taskbar icons", MIN_TASKBAR_ICON_SIZE,
+                MAX_TASKBAR_ICON_SIZE, taskbarIconSize());
+        SeekBar desktopSize = addSizeSetting(settings, "Desktop shortcut icons", MIN_SHORTCUT_ICON_SIZE,
+                MAX_SHORTCUT_ICON_SIZE, shortcutIconSize());
+
+        new AlertDialog.Builder(this).setTitle("Desktop settings").setView(settings)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Save", (dialog, which) -> {
+                    prefs.edit().putInt("taskbarIconSize", MIN_TASKBAR_ICON_SIZE + taskbarSize.getProgress())
+                            .putInt("shortcutIconSize", MIN_SHORTCUT_ICON_SIZE + desktopSize.getProgress()).apply();
+                    updateTaskbarHeight();
+                    renderDockApps();
+                    workspace.updateShortcutIconSizes();
+                }).show();
+    }
+
+    private SeekBar addSizeSetting(LinearLayout parent, String name, int min, int max, int size) {
+        TextView value = label(name + " · " + size + " dp", 15);
+        parent.addView(value, new LinearLayout.LayoutParams(-1, dp(36)));
+        SeekBar slider = new SeekBar(this);
+        slider.setContentDescription(name);
+        slider.setMax(max - min);
+        slider.setProgress(size - min);
+        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                value.setText(name + " · " + (min + progress) + " dp");
+            }
+
+            @Override public void onStartTrackingTouch(SeekBar bar) { }
+            @Override public void onStopTrackingTouch(SeekBar bar) { }
+        });
+        parent.addView(slider, new LinearLayout.LayoutParams(-1, dp(40)));
+        return slider;
+    }
+
     private void renderDockApps() {
         dockApps.removeAllViews();
+        int iconSize = dp(taskbarIconSize());
         String pinned = prefs.getString("pinned", "");
         ArrayList<String> visible = new ArrayList<>();
         if (!pinned.isEmpty()) for (String key : pinned.split("\\|")) if (find(key) != null && !visible.contains(key)) visible.add(key);
@@ -223,7 +295,7 @@ public class MainActivity extends Activity {
             entry.setGravity(Gravity.CENTER);
             ImageView icon = new ImageView(this);
             icon.setImageDrawable(app.loadIcon(getPackageManager()));
-            entry.addView(icon, new LinearLayout.LayoutParams(dp(27), dp(27)));
+            entry.addView(icon, new LinearLayout.LayoutParams(iconSize, iconSize));
             TextView name = label(app.loadLabel(getPackageManager()).toString(), 10);
             name.setSingleLine(true); name.setGravity(Gravity.CENTER);
             name.setPadding(dp(2), 0, dp(2), 0);
@@ -362,7 +434,7 @@ public class MainActivity extends Activity {
         drawer.setBackgroundColor(0xFF2B4059);
         drawer.setPadding(dp(12), dp(12), dp(12), dp(12));
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(380), -1, Gravity.LEFT | Gravity.TOP);
-        params.bottomMargin = dp(64);
+        params.bottomMargin = taskbarHeight();
         root.addView(drawer, params);
 
         EditText search = new EditText(this);
