@@ -208,8 +208,10 @@ public class MainActivity extends Activity {
 
         HorizontalScrollView dockScroll = new HorizontalScrollView(this);
         dockScroll.setHorizontalScrollBarEnabled(false);
+        dockScroll.setFillViewport(true);
         dock.addView(dockScroll, new LinearLayout.LayoutParams(0, -1, 1));
         dockApps = new LinearLayout(this);
+        dockApps.setGravity(Gravity.CENTER);
         dockScroll.addView(dockApps, new FrameLayout.LayoutParams(-2, -1));
 
         taskbarButton("⚙", "Dexlike Launcher settings", this::showDesktopSettings);
@@ -402,7 +404,7 @@ public class MainActivity extends Activity {
             child.setLayoutParams(params);
             if (child instanceof TextView) {
                 TextView button = (TextView) child;
-                autoSizeTaskbar(button, child == quickSettings && side ? 12 : side ? 22 : 14);
+                autoSizeTaskbar(button, child == quickSettings ? 32 : side ? 22 : 14);
                 if (child.getBackground() instanceof NavigationGlyph) child.getBackground().invalidateSelf();
             }
         }
@@ -411,11 +413,17 @@ public class MainActivity extends Activity {
         trayTime.setGravity(Gravity.CENTER);
         trayDate.setGravity(Gravity.CENTER);
         trayContainer.setGravity(Gravity.CENTER);
-        trayContainer.setPadding(dp(2), 0, dp(2), dp(side ? 16 : 0));
+        trayContainer.setPadding(dp(3), dp(2), dp(3), dp(2));
+        trayTime.setIncludeFontPadding(false);
+        trayDate.setIncludeFontPadding(false);
+        trayTime.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1.2f));
+        trayDate.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1f));
+        quickSettings.setIncludeFontPadding(false);
+        quickSettings.setPadding(dp(3), dp(3), dp(3), dp(3));
         trayTime.setFormat12Hour("h:mm");
         trayTime.setFormat24Hour("HH:mm");
-        autoSizeTaskbar(trayTime, side ? 20 : 16);
-        autoSizeTaskbar(trayDate, 12);
+        autoSizeTaskbar(trayTime, 36);
+        autoSizeTaskbar(trayDate, 28);
         trayDate.setFormat12Hour(side ? "MMM d" : "EEE, MMM d");
         trayDate.setFormat24Hour(side ? "MMM d" : "EEE, MMM d");
         FrameLayout.LayoutParams workspaceParams = (FrameLayout.LayoutParams) workspace.getLayoutParams();
@@ -1011,13 +1019,13 @@ public class MainActivity extends Activity {
     private final Runnable rehideBars = this::suppressSystemBars;
 
     private void scheduleBarSuppression() {
-        if (root == null || !hasWindowFocus() || !prefs.getBoolean("suppressSystemBars", true)) return;
+        if (root == null || !prefs.getBoolean("suppressSystemBars", true)) return;
         root.removeCallbacks(rehideBars);
-        root.postDelayed(rehideBars, samsungTaskbar() ? 3000 : 100);
+        root.postDelayed(rehideBars, 2000);
     }
 
     private void suppressSystemBars() {
-        if (root == null || !hasWindowFocus()) return;
+        if (root == null) return;
         boolean hide = prefs.getBoolean("suppressSystemBars", true);
         if (Build.VERSION.SDK_INT >= 30) {
             WindowInsetsController controller = getWindow().getInsetsController();

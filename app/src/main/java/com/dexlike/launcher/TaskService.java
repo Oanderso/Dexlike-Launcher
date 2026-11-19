@@ -15,13 +15,20 @@ import java.util.List;
 public final class TaskService extends ITaskService.Stub {
     private volatile int[] monitoredArea;
     private volatile String fittingError = "";
+    private volatile boolean barPolicyActive;
+    private long barsVisibleSince;
     private final java.util.concurrent.ScheduledExecutorService fitter = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
 
     public TaskService() {
         fitter.scheduleWithFixedDelay(() -> {
             int[] area = monitoredArea;
             if (area == null) return;
-            try { fittingError = fitWindows(area[0], area[1], area[2], area[3], area[4], area[5]); }
+            try {
+                if (barPolicyActive) {
+                    try { hideExpiredSystemBars(area[0]); }
+                    catch (Exception error) { android.util.Log.w("DexlikeBars", "Cannot hide native bars", error); }
+                }
+                fittingError = fitWindows(area[0], area[1], area[2], area[3], area[4], area[5]); }
             catch (RuntimeException error) { fittingError = error.toString(); }
         }, 0, 500, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
@@ -319,8 +326,42 @@ public final class TaskService extends ITaskService.Stub {
         catch (Exception ignored) { return "{\"error\":\"Window access unavailable\"}"; }
     }
 
+    // Read global insets rather than the launcher's focus: another freeform app may
+    // own focus while Samsung's desktop bars are revealed.
+    private void hideExpiredSystemBars(int display) throws Exception {
+        Class<?> wmClass = Class.forName("android.view.IWindowManager");
+        android.os.IBinder binder = (android.os.IBinder) Class.forName("android.os.ServiceManager")
+                .getMethod("getService", String.class).invoke(null, "window");
+        Object wm = Class.forName("android.view.IWindowManager$Stub")
+                .getMethod("asInterface", android.os.IBinder.class).invoke(null, binder);
+        Class<?> stateClass = Class.forName("android.view.InsetsState");
+        Object state = stateClass.getConstructor().newInstance();
+        wmClass.getMethod("getWindowInsets", int.class, android.os.IBinder.class, stateClass)
+                .invoke(wm, display, null, state);
+        boolean visible = false;
+        int count = (Integer) stateClass.getMethod("sourceSize").invoke(state);
+        for (int i = 0; i < count; i++) {
+            Object source = stateClass.getMethod("sourceAt", int.class).invoke(state, i);
+            Class<?> sourceClass = Class.forName("android.view.InsetsSource");
+            int type = (Integer) sourceClass.getMethod("getType").invoke(source);
+            if ((type & 3) != 0 && (Boolean) sourceClass.getMethod("isVisible").invoke(source)) visible = true;
+        }
+        long now = android.os.SystemClock.uptimeMillis();
+        if (!visible) { barsVisibleSince = 0; return; }
+        if (barsVisibleSince == 0) barsVisibleSince = now;
+        if (now - barsVisibleSince < 2000) return;
+        Object multi = invoke(manager(), "getMultiTaskingBinder", new Class<?>[]{});
+        Class.forName("com.samsung.android.multiwindow.IMultiTaskingBinder")
+                .getMethod("updateSystemBarVis", int.class, int.class).invoke(multi, 0, 3);
+        wmClass.getMethod("updateDisplayWindowRequestedVisibleTypes", int.class, int.class, int.class,
+                Class.forName("android.view.inputmethod.ImeTracker$Token"))
+                .invoke(wm, display, 0, 3, null);
+    }
+
     @Override public String taskbarPolicy(boolean samsung) {
         try {
+            barPolicyActive = "samsung".equalsIgnoreCase(android.os.Build.MANUFACTURER) && android.os.Build.VERSION.SDK_INT >= 35;
+            barsVisibleSince = 0;
             // Change only the two policies used by Dexlike's documented ADB setup.
             // Do not overwrite unrelated policies configured by another application.
             Process read = new ProcessBuilder("settings", "get", "global", "policy_control").start();

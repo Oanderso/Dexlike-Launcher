@@ -4,7 +4,12 @@ package com.dexlike.launcher;
 public final class TaskBridgeProbe {
     public static void main(String[] args) throws Exception {
         TaskService service = new TaskService();
-        if (args.length > 0 && "wallpaper".equals(args[0])) {
+        if (args.length > 0 && "bars".equals(args[0])) {
+            java.lang.reflect.Method hide = TaskService.class.getDeclaredMethod("hideExpiredSystemBars", int.class);
+            hide.setAccessible(true);
+            for (int i = 0; i < 7; i++) { hide.invoke(service, 0); Thread.sleep(500); }
+            System.out.println("bars monitor completed");
+        } else if (args.length > 0 && "wallpaper".equals(args[0])) {
             try (android.os.ParcelFileDescriptor file = service.wallpaper(0)) {
                 android.graphics.BitmapFactory.Options options = new android.graphics.BitmapFactory.Options();
                 options.inJustDecodeBounds = true;
