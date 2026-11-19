@@ -68,6 +68,8 @@ public class MainActivity extends Activity {
     private final ArrayList<Runnable> hoverActions = new ArrayList<>();
     private String dockSignature = "";
     private TextView quickSettings;
+    private TextClock trayTime, trayDate;
+    private LinearLayout trayContainer;
     private final BroadcastReceiver battery = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
@@ -123,8 +125,9 @@ public class MainActivity extends Activity {
                 // A transient native taskbar may overlay the desktop, but must never reflow it.
                 int nativeBottom = samsungTaskbar() ? insets.getInsets(WindowInsets.Type.navigationBars()).bottom : 0;
                 dock.setTranslationY(0);
-                dock.setPadding(dp(samsungTaskbar() ? 5 : 8), dp(samsungTaskbar() ? 8 : 5),
-                        dp(samsungTaskbar() ? 5 : 8), dp(samsungTaskbar() ? 8 : 5) + nativeBottom);
+                boolean side = sideTaskbar();
+                dock.setPadding(dp(side ? 5 : 8), dp(side ? 8 : 5), dp(side ? 5 : 8),
+                        dp(side ? 16 : 5) + (side ? nativeBottom : 0));
                 return insets;
             });
         } else {
@@ -215,12 +218,15 @@ public class MainActivity extends Activity {
         quickSettings = taskbarButton("▾", "Quick Settings", () -> runSystemAction(GLOBAL_ACTION_QUICK_SETTINGS));
 
         LinearLayout dateTime = new LinearLayout(this);
+        trayContainer = dateTime;
         dateTime.setOrientation(LinearLayout.VERTICAL);
         dateTime.setGravity(Gravity.CENTER_VERTICAL);
         dateTime.setPadding(dp(6), 0, dp(4), 0);
         TextClock clock = trayClock();
+        trayTime = clock;
         dateTime.addView(clock, new LinearLayout.LayoutParams(-1, -2));
         TextClock date = trayClock();
+        trayDate = date;
         date.setFormat12Hour("EEE, MMM d");
         date.setFormat24Hour("EEE, MMM d");
         dateTime.addView(date, new LinearLayout.LayoutParams(-1, -2));
@@ -242,6 +248,9 @@ public class MainActivity extends Activity {
         view.setTextColor(textColor);
         view.setTextSize(12);
         view.setGravity(Gravity.END);
+        view.setSingleLine(true);
+        view.setIncludeFontPadding(false);
+        view.setAutoSizeTextTypeUniformWithConfiguration(8, 12, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
         view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         return view;
     }
@@ -273,11 +282,12 @@ public class MainActivity extends Activity {
         NavigationGlyph(int shape) { this.shape = shape; paint.setColor(Color.WHITE); paint.setStrokeWidth(dp(2)); }
         @Override public void draw(android.graphics.Canvas canvas) {
             Rect bounds = getBounds();
-            float x = bounds.exactCenterX(), y = bounds.exactCenterY(), r = dp(12);
+            float x = bounds.exactCenterX(), y = bounds.exactCenterY();
+            float r = Math.min(dp(14), Math.min(bounds.width(), bounds.height()) * .24f);
             paint.setStyle(android.graphics.Paint.Style.STROKE);
             if (shape == 0) {
                 paint.setStyle(android.graphics.Paint.Style.FILL);
-                float size = dp(9), gap = dp(4), startX = x - size - gap / 2, startY = y - size - gap / 2;
+                float size = r * .75f, gap = r / 3, startX = x - size - gap / 2, startY = y - size - gap / 2;
                 for (int row = 0; row < 2; row++) for (int col = 0; col < 2; col++) {
                     float left = startX + col * (size + gap), top = startY + row * (size + gap);
                     canvas.drawRoundRect(left, top, left + size, top + size, dp(2), dp(2), paint);
@@ -343,16 +353,31 @@ public class MainActivity extends Activity {
         else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER);
     }
 
+    private DesktopGeometry.Edge dockEdge() {
+        if (!samsungTaskbar()) return DesktopGeometry.Edge.BOTTOM;
+        String edge = prefs.getString("samsungControlEdge", "RIGHT");
+        if ("LEFT".equals(edge)) return DesktopGeometry.Edge.LEFT;
+        if ("TOP".equals(edge)) return DesktopGeometry.Edge.TOP;
+        return DesktopGeometry.Edge.RIGHT;
+    }
+
+    private boolean sideTaskbar() {
+        return dockEdge() == DesktopGeometry.Edge.RIGHT || dockEdge() == DesktopGeometry.Edge.LEFT;
+    }
+
     private int taskbarThickness() { return samsungTaskbar() ? dp(72) : taskbarHeight(); }
 
     private void updateTaskbarHeight() {
-        boolean side = samsungTaskbar();
+        boolean side = sideTaskbar();
+        DesktopGeometry.Edge edge = dockEdge();
         int thickness = taskbarThickness();
         dock.setOrientation(side ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
         dock.setGravity(side ? Gravity.CENTER_HORIZONTAL : Gravity.CENTER_VERTICAL);
-        dock.setPadding(dp(side ? 5 : 8), dp(side ? 8 : 5), dp(side ? 5 : 8), dp(side ? 8 : 5));
+        dock.setPadding(dp(side ? 5 : 8), dp(side ? 8 : 5), dp(side ? 5 : 8), dp(side ? 16 : 5));
         dock.setLayoutParams(new FrameLayout.LayoutParams(side ? thickness : -1,
-                side ? -1 : thickness, side ? Gravity.RIGHT : Gravity.BOTTOM));
+                side ? -1 : thickness, edge == DesktopGeometry.Edge.RIGHT ? Gravity.RIGHT
+                        : edge == DesktopGeometry.Edge.LEFT ? Gravity.LEFT
+                        : edge == DesktopGeometry.Edge.TOP ? Gravity.TOP : Gravity.BOTTOM));
         for (int i = 0; i < dock.getChildCount(); i++) {
             View child = dock.getChildAt(i);
             if (!bottomDockParams.containsKey(child))
@@ -361,14 +386,30 @@ public class MainActivity extends Activity {
             if (!side) params = new LinearLayout.LayoutParams(bottomDockParams.get(child));
             else if (child instanceof HorizontalScrollView) params = new LinearLayout.LayoutParams(-1, 0, 1);
             else {
-                params = new LinearLayout.LayoutParams(-1, dp(child instanceof LinearLayout ? 64 : 52));
+                params = new LinearLayout.LayoutParams(-1, dp(child instanceof LinearLayout ? 80 : 52));
                 params.setMargins(0, dp(3), 0, dp(3));
             }
             child.setLayoutParams(params);
+            if (child instanceof TextView) {
+                TextView button = (TextView) child;
+                button.setSingleLine(true);
+                button.setAutoSizeTextTypeUniformWithConfiguration(10, side ? 22 : 14, 1,
+                        android.util.TypedValue.COMPLEX_UNIT_SP);
+            }
         }
+        int clockGravity = edge == DesktopGeometry.Edge.RIGHT ? Gravity.LEFT
+                : edge == DesktopGeometry.Edge.LEFT ? Gravity.RIGHT : Gravity.END;
+        trayTime.setGravity(clockGravity | Gravity.CENTER_VERTICAL);
+        trayDate.setGravity(clockGravity | Gravity.CENTER_VERTICAL);
+        trayContainer.setGravity(clockGravity | Gravity.CENTER_VERTICAL);
+        trayContainer.setPadding(dp(side ? 2 : 6), 0, dp(side ? 2 : 4), dp(side ? 12 : 0));
+        trayDate.setFormat12Hour(side ? "MMM d" : "EEE, MMM d");
+        trayDate.setFormat24Hour(side ? "MMM d" : "EEE, MMM d");
         FrameLayout.LayoutParams workspaceParams = (FrameLayout.LayoutParams) workspace.getLayoutParams();
-        workspaceParams.bottomMargin = side ? 0 : thickness;
-        workspaceParams.rightMargin = side ? thickness : 0;
+        workspaceParams.bottomMargin = edge == DesktopGeometry.Edge.BOTTOM ? thickness : 0;
+        workspaceParams.rightMargin = edge == DesktopGeometry.Edge.RIGHT ? thickness : 0;
+        workspaceParams.leftMargin = edge == DesktopGeometry.Edge.LEFT ? thickness : 0;
+        workspaceParams.topMargin = edge == DesktopGeometry.Edge.TOP ? thickness : 0;
         workspace.setLayoutParams(workspaceParams);
         root.post(() -> { if (windowTracker != null) windowTracker.refresh(); });
     }
@@ -421,12 +462,22 @@ public class MainActivity extends Activity {
         taskbarSource.addView(dexlike);
         RadioButton samsung = new RadioButton(this);
         samsung.setId(View.generateViewId());
-        samsung.setText("Samsung taskbar + Dexlike controls on right");
+        samsung.setText("Samsung taskbar + Dexlike controls");
         samsung.setTextColor(textColor);
         taskbarSource.addView(samsung);
         taskbarSource.check(samsungTaskbar() ? samsung.getId() : dexlike.getId());
         settings.addView(taskbarSource);
-        settings.addView(label("Dexlike shows its app icons. Samsung hides those icons and puts Dexlike’s controls on the right edge. The native bar appears on swipe without changing desktop size. Samsung controls its own buttons. Connect Shizuku to repair the previous permanent-bar setting.", 12));
+        settings.addView(label("Samsung mode: Dexlike control bar position", 14));
+        Spinner controlEdge = new Spinner(this);
+        String[] edges = {"RIGHT", "LEFT", "TOP"};
+        controlEdge.setAdapter(new ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"Right edge", "Left edge", "Top edge"}));
+        String selectedEdge = prefs.getString("samsungControlEdge", "RIGHT");
+        controlEdge.setSelection("LEFT".equals(selectedEdge) ? 1 : "TOP".equals(selectedEdge) ? 2 : 0);
+        controlEdge.setEnabled(samsung.isChecked());
+        taskbarSource.setOnCheckedChangeListener((group, id) -> controlEdge.setEnabled(id == samsung.getId()));
+        settings.addView(controlEdge);
+        settings.addView(label("Dexlike shows its app icons. Samsung hides those icons and puts Dexlike’s controls on the selected edge. The native bar appears on swipe without changing desktop size. Samsung controls its own buttons. Connect Shizuku to repair the previous permanent-bar setting.", 12));
 
         Switch iconGrid = new Switch(this);
         iconGrid.setText("Apps drawer: icons only, three columns");
@@ -465,7 +516,7 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Dexlike Launcher settings").setView(settingsScroll)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Save", (dialog, which) -> {
-                    prefs.edit().putBoolean("samsungTaskbar", samsung.isChecked()).putBoolean("drawerIconGrid", iconGrid.isChecked())
+                    prefs.edit().putString("samsungControlEdge", edges[controlEdge.getSelectedItemPosition()]).putBoolean("samsungTaskbar", samsung.isChecked()).putBoolean("drawerIconGrid", iconGrid.isChecked())
                             .putBoolean("suppressSystemBars", suppressBars.isChecked()).putInt("taskbarIconSize", MIN_TASKBAR_ICON_SIZE + taskbarSize.getProgress())
                             .putInt("shortcutIconSize", MIN_SHORTCUT_ICON_SIZE + desktopSize.getProgress()).apply();
                     dock.setTranslationY(0);
@@ -755,7 +806,7 @@ public class MainActivity extends Activity {
         int[] origin = new int[2];
         root.getLocationOnScreen(origin);
         int[] area = DesktopGeometry.workArea(origin[0], origin[1], root.getWidth(), root.getHeight(),
-                taskbarThickness(), samsungTaskbar());
+                taskbarThickness(), dockEdge());
         return new Rect(area[0], area[1], area[2], area[3]);
     }
 
@@ -798,8 +849,9 @@ public class MainActivity extends Activity {
         drawer.setClickable(true);
         drawer.setBackgroundColor(0xFF2B4059);
         drawer.setPadding(dp(12), dp(12), dp(12), dp(12));
-        drawerPopup = new PopupWindow(drawer, Math.min(dp(380), Math.max(1, root.getWidth() - (samsungTaskbar() ? taskbarThickness() : 0))),
-                Math.min(dp(620), Math.max(dp(100), root.getHeight() - (samsungTaskbar() ? 0 : taskbarThickness()))), true);
+        Rect drawerArea = desktopWorkArea();
+        drawerPopup = new PopupWindow(drawer, Math.min(dp(380), Math.max(1, drawerArea.width())),
+                Math.min(dp(620), Math.max(1, drawerArea.height())), true);
         drawerPopup.setBackgroundDrawable(new ColorDrawable(0xFF2B4059));
         drawerPopup.setOutsideTouchable(true);
         drawerPopup.setInputMethodMode(PopupWindow.INPUT_METHOD_NEEDED);
@@ -866,8 +918,11 @@ public class MainActivity extends Activity {
             public void afterTextChanged(android.text.Editable s) {}
         });
         renderDrawer.run();
-        drawerPopup.showAtLocation(root, samsungTaskbar() ? Gravity.TOP | Gravity.RIGHT : Gravity.BOTTOM | Gravity.LEFT,
-                samsungTaskbar() ? taskbarThickness() : 0, samsungTaskbar() ? 0 : taskbarThickness());
+        DesktopGeometry.Edge edge = dockEdge();
+        int drawerGravity = edge == DesktopGeometry.Edge.BOTTOM ? Gravity.BOTTOM | Gravity.LEFT
+                : edge == DesktopGeometry.Edge.RIGHT ? Gravity.TOP | Gravity.RIGHT : Gravity.TOP | Gravity.LEFT;
+        drawerPopup.showAtLocation(root, drawerGravity, sideTaskbar() ? taskbarThickness() : 0,
+                sideTaskbar() ? 0 : taskbarThickness());
         search.requestFocus();
         search.post(() -> {
             if (drawerOpen && drawerSearch == search) {

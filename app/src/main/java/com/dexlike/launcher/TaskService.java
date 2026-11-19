@@ -147,11 +147,28 @@ public final class TaskService extends ITaskService.Stub {
                 if (original.isEmpty()) continue;
                 Rect fitted = fit(original, area);
                 if (!original.equals(fitted)) {
-                    invoke(service, "resizeTask", new Class<?>[]{int.class, Rect.class, int.class}, task.taskId, fitted, 0);
+                    resizeWindow(service, task, fitted);
                 }
             }
             return "";
         } catch (Exception error) { return message(error); }
+    }
+
+    private void resizeWindow(Object service, TaskInfo task, Rect fitted) throws Exception {
+        try {
+            // Modern DeX windows belong to a task organizer. Apply their bounds through
+            // that organizer rather than relying on the legacy resizeTask path.
+            Class<?> transactionClass = Class.forName("android.window.WindowContainerTransaction");
+            Object transaction = transactionClass.getConstructor().newInstance();
+            Object token = task.getClass().getField("token").get(task);
+            transactionClass.getMethod("setBounds", Class.forName("android.window.WindowContainerToken"), Rect.class)
+                    .invoke(transaction, token, fitted);
+            Object organizer = invoke(service, "getWindowOrganizerController", new Class<?>[]{});
+            Class.forName("android.window.IWindowOrganizerController").getMethod("applyTransaction", transactionClass)
+                    .invoke(organizer, transaction);
+        } catch (ReflectiveOperationException modernUnavailable) {
+            invoke(service, "resizeTask", new Class<?>[]{int.class, Rect.class, int.class}, task.taskId, fitted, 0);
+        }
     }
 
     private Object samsung() throws Exception {

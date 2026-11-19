@@ -1,9 +1,19 @@
 package com.dexlike.launcher;
 
 final class DesktopGeometry {
+    enum Edge { BOTTOM, RIGHT, LEFT, TOP }
+
     static int[] workArea(int left, int top, int width, int height, int thickness, boolean rightDock) {
-        int right = left + Math.max(0, width - (rightDock ? thickness : 0));
-        int bottom = top + Math.max(0, height - (rightDock ? 0 : thickness));
+        return workArea(left, top, width, height, thickness, rightDock ? Edge.RIGHT : Edge.BOTTOM);
+    }
+
+    static int[] workArea(int left, int top, int width, int height, int thickness, Edge edge) {
+        int right = left + Math.max(0, width), bottom = top + Math.max(0, height);
+        thickness = Math.max(0, thickness);
+        if (edge == Edge.LEFT) left = Math.min(right, left + thickness);
+        if (edge == Edge.RIGHT) right = Math.max(left, right - thickness);
+        if (edge == Edge.TOP) top = Math.min(bottom, top + thickness);
+        if (edge == Edge.BOTTOM) bottom = Math.max(top, bottom - thickness);
         return new int[]{left, top, right, bottom};
     }
 

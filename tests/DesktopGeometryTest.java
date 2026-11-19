@@ -17,6 +17,18 @@ public final class DesktopGeometryTest {
             int[] window = DesktopGeometry.fit(10, 20, 1920, 1200, side[0], side[1], side[2], side[3]);
             if (window[2] != side[2] || window[3] != 1220) throw new AssertionError("window overlaps right dock");
         }
+        for (DesktopGeometry.Edge edge : DesktopGeometry.Edge.values()) {
+            for (int thickness : new int[]{64, 72, 134}) {
+                int[] area = DesktopGeometry.workArea(10, 20, 1920, 1200, thickness, edge);
+                int[] snapped = DesktopGeometry.fit(10, 20, 1920, 1200, area[0], area[1], area[2], area[3]);
+                if (!java.util.Arrays.equals(area, snapped)) throw new AssertionError("snap overlaps " + edge);
+                if (area[0] != 10 + (edge == DesktopGeometry.Edge.LEFT ? thickness : 0)
+                        || area[1] != 20 + (edge == DesktopGeometry.Edge.TOP ? thickness : 0)
+                        || area[2] != 1930 - (edge == DesktopGeometry.Edge.RIGHT ? thickness : 0)
+                        || area[3] != 1220 - (edge == DesktopGeometry.Edge.BOTTOM ? thickness : 0))
+                    throw new AssertionError("incorrect work area for " + edge);
+            }
+        }
         int[] unchanged = DesktopGeometry.fit(100, 120, 600, 400, 0, 28, 1920, 1118);
         if (unchanged[0] != 100 || unchanged[1] != 120 || unchanged[2] != 700 || unchanged[3] != 520)
             throw new AssertionError("fitting changed a window already within the desktop");
