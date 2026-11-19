@@ -13,7 +13,6 @@ import android.graphics.Typeface;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
-import android.view.PopupMenu;
 import android.widget.*;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -30,7 +29,6 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private List<ResolveInfo> apps;
     private final ArrayList<String> recent = new ArrayList<>();
-    private HorizontalScrollView dockScroll;
     private LinearLayout dockApps;
 
     private enum Placement { DEFAULT, CENTER, LEFT, RIGHT }
@@ -101,7 +99,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams div = new LinearLayout.LayoutParams(dp(1), dp(35));
         div.setMargins(dp(5), 0, dp(10), 0); dock.addView(divider, div);
 
-        dockScroll = new HorizontalScrollView(this);
+        HorizontalScrollView dockScroll = new HorizontalScrollView(this);
         dockScroll.setHorizontalScrollBarEnabled(false);
         dock.addView(dockScroll, new LinearLayout.LayoutParams(0, -1, 1));
         dockApps = new LinearLayout(this);
