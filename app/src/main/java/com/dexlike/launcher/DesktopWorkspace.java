@@ -11,6 +11,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ResolveInfo;
 import android.graphics.ImageDecoder;
+import android.graphics.Point;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Build;
@@ -42,6 +43,9 @@ final class DesktopWorkspace extends FrameLayout {
     private static final int CONFIGURE_WIDGET = 103;
     private static final int TOOLBAR = 32;
     private static final int STEP = 16;
+    private static final int GRID_MARGIN = 12;
+    private static final int SHORTCUT_WIDTH = 96;
+    private static final int SHORTCUT_HEIGHT = 92;
 
     private final MainActivity activity;
     private final SharedPreferences prefs;
@@ -57,6 +61,7 @@ final class DesktopWorkspace extends FrameLayout {
         int widget = -1;
         int x, y, width, height;
         FrameLayout view;
+        ImageView icon;
     }
 
     DesktopWorkspace(MainActivity activity, SharedPreferences prefs, Bundle state) {
@@ -101,7 +106,18 @@ final class DesktopWorkspace extends FrameLayout {
             chooseWidget();
             return true;
         });
+        menu.getMenu().add("Desktop settings").setOnMenuItemClickListener(item -> {
+            activity.showDesktopSettings();
+            return true;
+        });
         menu.show();
+    }
+
+    void updateShortcutIconSizes() {
+        int size = dp(activity.shortcutIconSize());
+        for (Item item : items) {
+            if (item.icon != null) item.icon.setLayoutParams(new LinearLayout.LayoutParams(size, size));
+        }
     }
 
     private void changeWallpaper(Uri next) {
@@ -155,9 +171,16 @@ final class DesktopWorkspace extends FrameLayout {
         }
         Item item = new Item();
         item.shortcut = key;
-        item.width = 96;
-        item.height = 92;
-        place(item);
+        item.width = SHORTCUT_WIDTH;
+        item.height = SHORTCUT_HEIGHT;
+        Point slot = nearestShortcutSlot(item, GRID_MARGIN, GRID_MARGIN, occupiedShortcutSlots(item));
+        if (slot == null) {
+            message("The desktop shortcut grid is full");
+            return;
+        }
+        rememberVisibleShortcutSlots();
+        item.x = slot.x;
+        item.y = slot.y;
         addItem(item);
     }
 
@@ -277,6 +300,61 @@ final class DesktopWorkspace extends FrameLayout {
         item.x = item.y = 12 + STEP * (items.size() % 5);
     }
 
+    private Point nearestShortcutSlot(Item item, int x, int y, List<Point> occupied) {
+        Point best = null;
+        long bestDistance = Long.MAX_VALUE;
+        int maxX = Math.max(0, units(getWidth()) - item.width);
+        int maxY = Math.max(0, units(getHeight()) - item.height);
+        for (int row = Math.min(GRID_MARGIN, maxY); row <= maxY; row += SHORTCUT_HEIGHT) {
+            for (int column = Math.min(GRID_MARGIN, maxX); column <= maxX; column += SHORTCUT_WIDTH) {
+                Point slot = new Point(column, row);
+                if (occupied.contains(slot)) continue;
+                long dx = column - x;
+                long dy = row - y;
+                long distance = dx * dx + dy * dy;
+                if (distance < bestDistance) {
+                    best = slot;
+                    bestDistance = distance;
+                }
+            }
+        }
+        return best;
+    }
+
+    private List<Point> occupiedShortcutSlots(Item excluded) {
+        List<Point> slots = new ArrayList<>();
+        for (Item item : items) {
+            if (item != excluded && item.shortcut != null && item.view.getVisibility() == VISIBLE) {
+                LayoutParams lp = (LayoutParams) item.view.getLayoutParams();
+                slots.add(new Point(units(lp.leftMargin), units(lp.topMargin)));
+            }
+        }
+        return slots;
+    }
+
+    private void rememberVisibleShortcutSlots() {
+        for (Item item : items) {
+            if (item.shortcut != null && item.view.getVisibility() == VISIBLE) {
+                LayoutParams lp = (LayoutParams) item.view.getLayoutParams();
+                item.x = units(lp.leftMargin);
+                item.y = units(lp.topMargin);
+            }
+        }
+    }
+
+    private void layoutShortcuts() {
+        List<Point> occupied = new ArrayList<>();
+        for (Item item : items) {
+            if (item.shortcut == null) continue;
+            Point slot = nearestShortcutSlot(item, item.x, item.y, occupied);
+            item.view.setVisibility(slot == null ? GONE : VISIBLE);
+            if (slot != null) {
+                occupied.add(slot);
+                item.view.setLayoutParams(params(item, slot.x, slot.y));
+            }
+        }
+    }
+
     private void addItem(Item item) {
         if (attach(item)) {
             items.add(item);
@@ -293,9 +371,10 @@ final class DesktopWorkspace extends FrameLayout {
             LinearLayout iconTile = new LinearLayout(activity);
             iconTile.setOrientation(LinearLayout.VERTICAL);
             iconTile.setGravity(Gravity.CENTER);
-            ImageView icon = new ImageView(activity);
-            icon.setImageDrawable(app.loadIcon(activity.getPackageManager()));
-            iconTile.addView(icon, new LinearLayout.LayoutParams(dp(42), dp(42)));
+            item.icon = new ImageView(activity);
+            item.icon.setImageDrawable(app.loadIcon(activity.getPackageManager()));
+            int iconSize = dp(activity.shortcutIconSize());
+            iconTile.addView(item.icon, new LinearLayout.LayoutParams(iconSize, iconSize));
             TextView title = text(app.loadLabel(activity.getPackageManager()), 12);
             title.setMaxLines(2);
             title.setShadowLayer(3, 0, 1, 0xFF000000);
@@ -335,9 +414,10 @@ final class DesktopWorkspace extends FrameLayout {
             installDrag(handle, item, false);
             int axes = info.resizeMode & AppWidgetProviderInfo.RESIZE_BOTH;
             if (axes != 0) {
-                TextView resize = text("⤡", 18);
-                resize.setContentDescription("Drag to resize widget");
-                toolbar.addView(resize, new LinearLayout.LayoutParams(dp(40), -1));
+                TextView resize = text("Resize", 12);
+                resize.setContentDescription("Resize widget");
+                resize.setTooltipText("Drag to resize or click for size options");
+                toolbar.addView(resize, new LinearLayout.LayoutParams(dp(56), -1));
                 installDrag(resize, item, true);
                 resize.setOnClickListener(v -> showResizeMenu(v, item, axes));
             }
@@ -352,19 +432,26 @@ final class DesktopWorkspace extends FrameLayout {
     }
 
     private LayoutParams params(Item item) {
+        return params(item, item.x, item.y);
+    }
+
+    private LayoutParams params(Item item, int x, int y) {
         int areaWidth = getWidth();
         int areaHeight = getHeight();
         int width = areaWidth > 0 ? Math.min(dp(item.width), areaWidth) : dp(item.width);
         int height = areaHeight > 0 ? Math.min(dp(item.height), areaHeight) : dp(item.height);
         LayoutParams lp = new LayoutParams(width, height, Gravity.TOP | Gravity.LEFT);
-        lp.leftMargin = clamp(dp(item.x), 0, Math.max(0, areaWidth - width));
-        lp.topMargin = clamp(dp(item.y), 0, Math.max(0, areaHeight - height));
+        lp.leftMargin = clamp(dp(x), 0, Math.max(0, areaWidth - width));
+        lp.topMargin = clamp(dp(y), 0, Math.max(0, areaHeight - height));
         return lp;
     }
 
     @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        for (Item item : items) item.view.setLayoutParams(params(item));
+        for (Item item : items) {
+            if (item.shortcut == null) item.view.setLayoutParams(params(item));
+        }
+        layoutShortcuts();
     }
 
     private void installDrag(View handle, Item item, boolean resize) {
@@ -372,6 +459,7 @@ final class DesktopWorkspace extends FrameLayout {
         handle.setOnTouchListener(new OnTouchListener() {
             private float downX, downY;
             private int startX, startY, startWidth, startHeight;
+            private int savedX, savedY, savedWidth, savedHeight;
             private boolean dragging;
             private final int slop = ViewConfiguration.get(activity).getScaledTouchSlop();
 
@@ -387,6 +475,10 @@ final class DesktopWorkspace extends FrameLayout {
                         startY = units(lp.topMargin);
                         startWidth = units(lp.width);
                         startHeight = units(lp.height);
+                        savedX = item.x;
+                        savedY = item.y;
+                        savedWidth = item.width;
+                        savedHeight = item.height;
                         dragging = false;
                         break;
                     case MotionEvent.ACTION_MOVE:
@@ -409,14 +501,27 @@ final class DesktopWorkspace extends FrameLayout {
                         item.view.setLayoutParams(params(item));
                         return true;
                     case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        if (dragging) {
-                            view.cancelLongPress();
-                            view.setPressed(false);
-                            save();
-                            return true;
+                        if (!dragging) break;
+                        if (item.shortcut != null) {
+                            int x = startX + units(event.getRawX() - downX);
+                            int y = startY + units(event.getRawY() - downY);
+                            Point slot = nearestShortcutSlot(item, x, y, occupiedShortcutSlots(item));
+                            item.x = slot == null ? savedX : slot.x;
+                            item.y = slot == null ? savedY : slot.y;
+                            item.view.setLayoutParams(params(item));
+                            rememberVisibleShortcutSlots();
                         }
-                        break;
+                        save();
+                        return true;
+                    case MotionEvent.ACTION_CANCEL:
+                        if (!dragging) break;
+                        item.x = savedX;
+                        item.y = savedY;
+                        item.width = savedWidth;
+                        item.height = savedHeight;
+                        item.view.setLayoutParams(item.shortcut == null
+                                ? params(item) : params(item, startX, startY));
+                        return true;
                     default:
                         break;
                 }
@@ -471,6 +576,7 @@ final class DesktopWorkspace extends FrameLayout {
             removeView(item.view);
             items.remove(item);
             if (item.widget != -1) host.deleteAppWidgetId(item.widget);
+            else layoutShortcuts();
             save();
             return true;
         });
@@ -488,8 +594,8 @@ final class DesktopWorkspace extends FrameLayout {
                 item.widget = data.optInt("widget", -1);
                 item.x = data.optInt("x");
                 item.y = data.optInt("y");
-                item.width = data.optInt("width", 96);
-                item.height = data.optInt("height", 92);
+                item.width = data.optInt("width", SHORTCUT_WIDTH);
+                item.height = data.optInt("height", SHORTCUT_HEIGHT);
                 if ((item.shortcut != null || item.widget != -1) && attach(item)) items.add(item);
             }
             save();
