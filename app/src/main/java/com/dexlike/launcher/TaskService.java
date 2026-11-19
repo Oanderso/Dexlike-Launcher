@@ -193,8 +193,12 @@ public final class TaskService extends ITaskService.Stub {
             Class<?> transactionClass = Class.forName("android.window.WindowContainerTransaction");
             Object transaction = transactionClass.getConstructor().newInstance();
             Object token = task.getClass().getField("token").get(task);
-            transactionClass.getMethod("reorder", Class.forName("android.window.WindowContainerToken"), boolean.class)
-                    .invoke(transaction, token, false);
+            Class<?> tokenClass = Class.forName("android.window.WindowContainerToken");
+            transactionClass.getMethod("setWindowingMode", tokenClass, int.class).invoke(transaction, token, 5);
+            // Native DeX moves a minimized leaf out of its organizer-owned Desk root, below HOME.
+            // Reordering inside a one-window Desk is a no-op, so reparent to the default display area.
+            transactionClass.getMethod("reparent", tokenClass, tokenClass, boolean.class)
+                    .invoke(transaction, token, null, false);
             Object organizer = invoke(service, "getWindowOrganizerController", new Class<?>[]{});
             Class.forName("android.window.IWindowOrganizerController")
                     .getMethod("startNewTransition", int.class, transactionClass).invoke(organizer, 1020, transaction);
