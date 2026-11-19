@@ -23,6 +23,7 @@ import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Build;
 import android.view.WindowInsets;
+import android.view.inputmethod.EditorInfo;
 import android.view.WindowInsetsController;
 import android.view.MotionEvent;
 import android.view.WindowManager;
@@ -121,7 +122,13 @@ public class MainActivity extends Activity {
         });
         if (Build.VERSION.SDK_INT >= 30) {
             root.setOnApplyWindowInsetsListener((view, insets) -> {
-                if (insets.isVisible(WindowInsets.Type.navigationBars()) || insets.isVisible(WindowInsets.Type.statusBars())) scheduleBarSuppression();
+                // The keyboard (IME) is a bar too: when it appears Android re-shows the status
+                // bar and the navigation strip, which pushes the desktop down and leaves a black
+                // strip at the bottom. Ask for the bars back immediately in that case.
+                boolean imeVisible = insets.isVisible(WindowInsets.Type.ime());
+                if (imeVisible != keyboardVisible) { keyboardVisible = imeVisible; applyKeyboardLayout(); }
+                if (insets.isVisible(WindowInsets.Type.navigationBars()) || insets.isVisible(WindowInsets.Type.statusBars()))
+                    scheduleBarSuppression(imeVisible);
                 // A transient native taskbar may overlay the desktop, but must never reflow it.
                 int nativeBottom = samsungTaskbar() ? insets.getInsets(WindowInsets.Type.navigationBars()).bottom : 0;
                 dock.setTranslationY(0);
@@ -900,7 +907,11 @@ public class MainActivity extends Activity {
         drawerPopup.setBackgroundDrawable(new ColorDrawable(0xFF2B4059));
         drawerPopup.setOutsideTouchable(true);
         drawerPopup.setInputMethodMode(PopupWindow.INPUT_METHOD_NEEDED);
-        drawerPopup.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        // ADJUST_RESIZE shrinks the popup and exposes the window behind it as a black bar.
+        drawerPopup.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
+        drawer.setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
         drawerPopup.setElevation(dp(12));
         drawerPopup.setOnDismissListener(() -> {
             drawerOpen = false; drawer = null; drawerSearch = null; renderDrawer = null; drawerPopup = null;
@@ -910,6 +921,8 @@ public class MainActivity extends Activity {
         EditText search = new EditText(this);
         drawerSearch = search;
         search.setSingleLine(true); search.setTextColor(Color.WHITE);
+        // No fullscreen/extract keyboard: the field stays on the desktop and the bars stay hidden.
+        search.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_FULLSCREEN);
         search.setHintTextColor(0xFFBCCADA); search.setHint("Search applications");
         drawer.addView(search, new LinearLayout.LayoutParams(-1, dp(55)));
 
@@ -1010,10 +1023,25 @@ public class MainActivity extends Activity {
     // Reassert the request on reveal/focus changes, without a permanent polling loop.
     private final Runnable rehideBars = this::suppressSystemBars;
 
-    private void scheduleBarSuppression() {
+    private boolean keyboardVisible;
+
+    private void scheduleBarSuppression() { scheduleBarSuppression(false); }
+
+    private void scheduleBarSuppression(boolean urgent) {
         if (root == null || !hasWindowFocus() || !prefs.getBoolean("suppressSystemBars", true)) return;
         root.removeCallbacks(rehideBars);
-        root.postDelayed(rehideBars, samsungTaskbar() ? 3000 : 100);
+        // A keyboard re-shows the bars the moment it opens; waiting the Samsung-taskbar interval
+        // leaves the status bar and the black strip on screen for seconds.
+        root.postDelayed(rehideBars, urgent ? 40 : (samsungTaskbar() ? 3000 : 100));
+    }
+
+    /** Keep the desktop frame fixed while the keyboard is open, so windows do not reflow. */
+    private void applyKeyboardLayout() {
+        if (getWindow() == null) return;
+        getWindow().setSoftInputMode(keyboardVisible
+                ? WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING | WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
+                : WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
+        suppressSystemBars();
     }
 
     private void suppressSystemBars() {
@@ -1023,7 +1051,9 @@ public class MainActivity extends Activity {
             WindowInsetsController controller = getWindow().getInsetsController();
             if (controller != null) {
                 controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-                if (hide) controller.hide(WindowInsets.Type.systemBars());
+                // Never include WindowInsets.Type.ime(): hiding the IME bar is what produces the
+                // black area under the keyboard.
+                if (hide) controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
                 else controller.show(WindowInsets.Type.systemBars());
             }
         } else {
